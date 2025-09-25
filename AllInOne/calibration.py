@@ -62,7 +62,7 @@ def run_calibration(port, config, status_queue):
                 for note in pre_test_notes:
                     csvwriter.writerow(note)
 
-                headers = ['Time', 'Strain A1', 'Strain B1', 'Strain A2', 'Strain B2', 'Current Time']
+                headers = ['Time', 'Strain A1', 'Strain A2', 'Strain B1', 'Strain B2', 'Current Time']
                 csvwriter.writerow(headers)
 
                 time_offset_check = True
@@ -96,8 +96,8 @@ def run_calibration(port, config, status_queue):
                             time_sec = float(data[0]) * 1e-6
                             strain_1 = float(data[1]) * SUPPLY_VOLTAGE / (RESOLUTION * GAIN)
                             strain_2 = float(data[2]) * SUPPLY_VOLTAGE / (RESOLUTION * GAIN)
-                            strain_b1 = float(data[1]) * SUPPLY_VOLTAGE / (RESOLUTION * GAIN)
-                            strain_b2 = float(data[2]) * SUPPLY_VOLTAGE / (RESOLUTION * GAIN)
+                            strain_B1 = float(data[3]) * SUPPLY_VOLTAGE / (RESOLUTION * GAIN)
+                            strain_B2 = float(data[4]) * SUPPLY_VOLTAGE / (RESOLUTION * GAIN)
                             acx1 = float(data[3])
                             acy1 = float(data[4])
                             acz1 = float(data[5])
@@ -110,13 +110,13 @@ def run_calibration(port, config, status_queue):
                             time_offset_check = False
 
                         time_sec -= time_offset
-                        csvwriter.writerow([time_sec, strain_1, strain_b1, strain_2, strain_b2, current_time])
+                        csvwriter.writerow([time_sec, strain_1, strain_B1, strain_2, strain_B2, current_time])
                         csvfile.flush()
 
                         strains['a1'].append(strain_1)
-                        strains['b1'].append(strain_b1)
                         strains['a2'].append(strain_2)
-                        strains['b2'].append(strain_b2)
+                        strains['b1'].append(strain_B1)
+                        strains['b2'].append(strain_B2)
 
                         status_queue.put(f"Press 'space' to end data collection for mass {mass}g at {position}cm")
 
@@ -133,21 +133,21 @@ def run_calibration(port, config, status_queue):
 
             avg_strains = {
                 'a1': np.mean(strains['a1']) if strains['a1'] else 0,
-                'b1': np.mean(strains['b1']) if strains['b1'] else 0,
                 'a2': np.mean(strains['a2']) if strains['a2'] else 0,
+                'b1': np.mean(strains['b1']) if strains['b1'] else 0,
                 'b2': np.mean(strains['b2']) if strains['b2'] else 0
             }
-            summary_data.append([mass, position, avg_strains['a1'], avg_strains['b1'], avg_strains['a2'], avg_strains['b2']])
+            summary_data.append([mass, position, avg_strains['a1'], avg_strains['a2'], avg_strains['b1'], avg_strains['b2']])
 
     with open(summary_path, 'w', newline='') as csvfile:
         csvwriter = csv.writer(csvfile)
         pre_test_notes = [
-            ["=================================================================="]
+            ["====="]
         ]
         for note in pre_test_notes:
             csvwriter.writerow(note)
 
-        headers = ['Mass (g)', 'Position (cm)', 'Avg Strain A1', 'Avg Strain B1', 'Avg Strain A2', 'Avg Strain B2']
+        headers = ['Mass (g)', 'Position (cm)', 'Avg Strain A1', 'Avg Strain A2', 'Avg Strain B1', 'Avg Strain B2']
         csvwriter.writerow(headers)
         for row in summary_data:
             csvwriter.writerow(row)
@@ -176,10 +176,10 @@ def calculate_coefficients(calibration_data, cal_status_var):
                 mass = float(row[0])
                 position = float(row[1])
                 strain_1 = float(row[2])   #2
-                strain_b1 = float(row[3])   #3
-                strain_2 = float(row[4])   #4
-                strain_b2 = float(row[5])   #5
-                valid_data.append((mass, position, strain_1, strain_b1, strain_2, strain_b2))
+                strain_2 = float(row[3])   #3
+                strain_B1 = float(row[4])   #4
+                strain_B2 = float(row[5])   #5
+                valid_data.append((mass, position, strain_1, strain_2, strain_B1, strain_B2))
             except ValueError:
                 continue
 
@@ -188,13 +188,13 @@ def calculate_coefficients(calibration_data, cal_status_var):
             return ""
 
         # Unpack filtered data
-        masses, positions, strains_a1, strains_b1, strains_a2, strains_b2 = zip(*valid_data)
+        masses, positions, strains_1, strains_2, strains_B1, strains_B2 = zip(*valid_data)
         masses = np.array(masses)
         positions = np.array(positions)
-        strains_a1 = np.array(strains_a1)
-        strains_b1 = np.array(strains_b1)
-        strains_a2 = np.array(strains_a2)
-        strains_b2 = np.array(strains_b2)
+        strains_1 = np.array(strains_1)
+        strains_2 = np.array(strains_2)
+        strains_B1 = np.array(strains_B1)
+        strains_B2 = np.array(strains_B2)
 
         # Match units
         masses = masses * 1e-3  # g to kg
@@ -206,49 +206,66 @@ def calculate_coefficients(calibration_data, cal_status_var):
         A = np.column_stack((forces * positions, -forces))
 
         # Fit models for each strain type: V = c + k*(F*x) + beta2*(-F), where beta2 = k*d
-        model_a1 = LinearRegression().fit(A, strains_a1)
-        c_a1 = model_a1.intercept_
-        k_a1 = model_a1.coef_[0]
-        beta2_a1 = model_a1.coef_[1]
-        d_a1 = beta2_a1 / k_a1 if k_a1 != 0 else 0
+        model_1 = LinearRegression().fit(A, strains_1)
+        c_1 = model_1.intercept_
+        k_1 = model_1.coef_[0]
+        beta2_1 = model_1.coef_[1]
+        d_1 = beta2_1 / k_1 if k_1 != 0 else 0
 
-        model_b1 = LinearRegression().fit(A, strains_b1)
-        c_b1 = model_b1.intercept_
-        k_b1 = model_b1.coef_[0]
-        beta2_b1 = model_b1.coef_[1]
-        d_b1 = beta2_b1 / k_b1 if k_b1 != 0 else 0
+        model_2 = LinearRegression().fit(A, strains_2)
+        c_2 = model_2.intercept_
+        k_2 = model_2.coef_[0]
+        beta2_2 = model_2.coef_[1]
+        d_2 = beta2_2 / k_2 if k_2 != 0 else 0
 
-        model_a2 = LinearRegression().fit(A, strains_a2)
-        c_a2 = model_a2.intercept_
-        k_a2 = model_a2.coef_[0]
-        beta2_a2 = model_a2.coef_[1]
-        d_a2 = beta2_a2 / k_a2 if k_a2 != 0 else 0
+        model_B1 = LinearRegression().fit(A, strains_B1)
+        c_B1 = model_B1.intercept_
+        k_B1 = model_B1.coef_[0]
+        beta2_B1 = model_B1.coef_[1]
+        d_B1 = beta2_B1 / k_B1 if k_B1 != 0 else 0
 
-        model_b2 = LinearRegression().fit(A, strains_b2)
-        c_b2 = model_b2.intercept_
-        k_b2 = model_b2.coef_[0]
-        beta2_b2 = model_b2.coef_[1]
-        d_b2 = beta2_b2 / k_b2 if k_b2 != 0 else 0
+        model_B2 = LinearRegression().fit(A, strains_B2)
+        c_B2 = model_B2.intercept_
+        k_B2 = model_B2.coef_[0]
+        beta2_B2 = model_B2.coef_[1]
+        d_B2 = beta2_B2 / k_B2 if k_B2 != 0 else 0
 
         # Format result
-        result = (f"A1: k={k_a1:.6f}, d={d_a1:.6f}, c={c_a1:.6f}\n"
-                  f"B1: k={k_b1:.6f}, d={d_b1:.6f}, c={c_b1:.6f}\n"
-                  f"A2: k={k_a2:.6f}, d={d_a2:.6f}, c={c_a2:.6f}\n"
-                  f"B2: k={k_b2:.6f}, d={d_b2:.6f}, c={c_b2:.6f}")
+        result = (f"A1: k={k_1:.6f}, d={d_1:.6f}, c={c_1:.6f}\n"
+                  f"A2: k={k_2:.6f}, d={d_2:.6f}, c={c_2:.6f}\n"
+                  f"B1: k={k_B1:.6f}, d={d_B1:.6f}, c={c_B1:.6f}\n"
+                  f"B2: k={k_B2:.6f}, d={d_B2:.6f}, c={c_B2:.6f}")
 
         # Optional plotting for A1 strain
-        V_a1_pred = model_a1.predict(A)
-        V_a2_pred = model_a2.predict(A)
+        V_1_pred = model_1.predict(A)
+        V_2_pred = model_2.predict(A)
+        V_B1_pred = model_B1.predict(A)
+        V_B2_pred = model_B2.predict(A)
         import matplotlib.pyplot as plt
         plt.figure(1)
-        plt.scatter(forces * positions, strains_a1, label='Original')
-        plt.scatter(forces * positions, V_a1_pred, label='Predicted')
+        plt.scatter(forces * positions, strains_1, label='Original')
+        plt.scatter(forces * positions, V_1_pred, label='Predicted')
+        plt.title('Gauge 1')
         plt.legend()
 
         plt.figure(2)
-        plt.scatter(forces * positions, strains_a2, label='Original')
-        plt.scatter(forces * positions, V_a2_pred, label='Predicted')
+        plt.scatter(forces * positions, strains_2, label='Original')
+        plt.scatter(forces * positions, V_2_pred, label='Predicted')
         plt.legend()
+        plt.title('Gauge 2')
+
+        plt.figure(3)
+        plt.scatter(forces * positions, strains_B1, label='Original')
+        plt.scatter(forces * positions, V_B1_pred, label='Predicted')
+        plt.title('Gauge B1')
+        plt.legend()
+
+        plt.figure(4)
+        plt.scatter(forces * positions, strains_B2, label='Original')
+        plt.scatter(forces * positions, V_B2_pred, label='Predicted')
+        plt.legend()
+        plt.title('Gauge B2')
+
         plt.show()
 
         return result

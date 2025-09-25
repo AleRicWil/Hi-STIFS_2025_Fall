@@ -56,6 +56,8 @@ class RealTimePlotWindow(QtWidgets.QMainWindow):
             config (dict): Configuration dictionary with test parameters.
             status_queue (Queue): Queue to send status messages to the UI.
         """
+        self.accelerations_flag = False
+        self.two_sensors_flag = True
         super().__init__()
         self.status_queue = status_queue
 
@@ -67,18 +69,21 @@ class RealTimePlotWindow(QtWidgets.QMainWindow):
             latest_cal = cal_data.iloc[-1]
             acc_cal_data = pd.read_csv(acc_csv_path)
             latest_acc_cal = acc_cal_data.iloc[-1]
+
             self.k_1 = latest_cal['k_A1']
-            self.k_B1 = latest_cal['k_B1']
-            self.k_2 = latest_cal['k_A2']
-            self.k_B2 = latest_cal['k_B2']
             self.d_1 = latest_cal['d_A1']
-            self.d_B1 = latest_cal['d_B1']
-            self.d_2 = latest_cal['d_A2']
-            self.d_B2 = latest_cal['d_B2']
             self.c_1 = latest_cal['c_A1']
-            self.c_B1 = latest_cal['c_B1']
+            self.k_2 = latest_cal['k_A2']
+            self.d_2 = latest_cal['d_A2']
             self.c_2 = latest_cal['c_A2']
+
+            self.k_B1 = latest_cal['k_B1']
+            self.d_B1 = latest_cal['d_B1']
+            self.c_B1 = latest_cal['c_B1']
+            self.k_B2 = latest_cal['k_B2']
+            self.d_B2 = latest_cal['d_B2']
             self.c_B2 = latest_cal['c_B2']
+
             self.m_x = latest_acc_cal['Gain X']
             self.b_x = latest_acc_cal['Offset X']
             self.m_y = latest_acc_cal['Gain Y']
@@ -118,8 +123,8 @@ class RealTimePlotWindow(QtWidgets.QMainWindow):
 
         pre_test_notes = [
             ["user_note", '', '', '', '', ''],
-            ["rodney configuration", config["configuration"], '', '', '', ''],
-            ["sensor calibration (k d c)", f'{self.k_1} {self.k_B1} {self.k_2} {self.k_B2}', f'{self.d_1} {self.d_B1} {self.d_2} {self.d_B2}', f'{self.c_1} {self.c_B1} {self.c_2} {self.c_B2}', '', ''],
+            ["configuration", config["configuration"], '', '', '', ''],
+            ["sensor calibration (k d c)", f'{self.k_1} {self.k_2} {self.k_B1} {self.k_B2}', f'{self.d_1} {self.d_2} {self.d_B1} {self.d_B2}', f'{self.c_1} {self.c_2} {self.c_B1} {self.c_B2}', '', ''],
             ["stalk array (lo med hi)", config["pvc_stiffness"], '', '', '', ''],
             ["sensor height (cm)", config["height"], '', '', '', ''],
             ["sensor yaw (degrees)", config["yaw"], '', '', '', ''],
@@ -139,45 +144,64 @@ class RealTimePlotWindow(QtWidgets.QMainWindow):
         pg.setConfigOptions(antialias=True)
         # Strain plot window
         self.win_strain = pg.GraphicsLayoutWidget(show=True, title=f"Strain Data Plots - Test {config['test_num']}")
-        self.win_strain.resize(1000, 500)
-        self.win_strain.move(0, 0)
-        self.plot_1 = self.win_strain.addPlot(title='1 Strain')
+        if self.accelerations_flag:
+            self.win_strain.resize(1000, 500)
+            self.win_strain.move(0, 0)
+        else:
+            self.win_strain.resize(1000, 1000)
+            self.win_strain.move(0, 0)
+        self.plot_1 = self.win_strain.addPlot(title='Strain 1')
         self.curve_1 = self.plot_1.plot(pen='r', name='1 Strain')
-        self.curve_b1 = self.plot_1.plot(pen='b', name='B1 Strain')
-        self.plot_2 = self.win_strain.addPlot(title='2 Strain')
+        self.curve_B1 = self.plot_1.plot(pen='b', name='B1 Strain')
+        self.plot_2 = self.win_strain.addPlot(title='Strain 2')
         self.curve_2 = self.plot_2.plot(pen='r', name='2 Strain')
-        self.curve_b2 = self.plot_2.plot(pen='b', name='B1 Strain')
+        self.curve_B2 = self.plot_2.plot(pen='b', name='B1 Strain')
 
         # Force and position plot window
         self.win_force_pos = pg.GraphicsLayoutWidget(show=True, title=f"Force and Position - Test {config['test_num']}")
-        self.win_force_pos.resize(1000, 500)
-        self.win_force_pos.move(1000, 0)
+        if self.accelerations_flag:
+            self.win_force_pos.resize(1000, 500)
+            self.win_force_pos.move(1000, 0)
+        else:
+            self.win_force_pos.resize(1000, 1000)
+            self.win_force_pos.move(1000, 0)
         self.plot_force = self.win_force_pos.addPlot(title='Force')
-        self.curve_force = self.plot_force.plot(pen='g', name='Force')
+        self.curve_force = self.plot_force.plot(pen='r', name='Force')
+        if self.two_sensors_flag:
+            self.curve_force_B = self.plot_force.plot(pen='b', name='Force B')
+
         self.plot_pos = self.win_force_pos.addPlot(title='Position')
-        self.curve_pos = self.plot_pos.plot(pen='y', name='Position')
+        self.curve_pos = self.plot_pos.plot(pen='r', name='Position')
+        if self.two_sensors_flag:
+            self.curve_pos_B = self.plot_pos.plot(pen='b', name='Position B')
 
         # Accel plot window
-        self.win_accel = pg.GraphicsLayoutWidget(show=True, title=f"Accelerometer Data - Test {config['test_num']}")
-        self.win_accel.resize(1000, 500)
-        self.win_accel.move(0, 600)
-        self.plot_mpuXY = self.win_accel.addPlot(title='Pitch (red) & Roll (green)')
-        self.curve_pitch = self.plot_mpuXY.plot(pen='r', name='X')
-        self.curve_roll = self.plot_mpuXY.plot(pen='g', name='Y')
-        
-        self.plot_mpuZ = self.win_accel.addPlot(title='Z Acceleration (g)')
-        self.curve_z1 = self.plot_mpuZ.plot(pen='b', name='Z')
+        if self.accelerations_flag:
+            self.win_accel = pg.GraphicsLayoutWidget(show=True, title=f"Accelerometer Data - Test {config['test_num']}")
+            self.win_accel.resize(1000, 500)
+            self.win_accel.move(0, 600)
+            self.plot_mpuXY = self.win_accel.addPlot(title='Pitch (red) & Roll (green)')
+            self.curve_pitch = self.plot_mpuXY.plot(pen='r', name='X')
+            self.curve_roll = self.plot_mpuXY.plot(pen='g', name='Y')
+            
+            self.plot_mpuZ = self.win_accel.addPlot(title='Z Acceleration (g)')
+            self.curve_z1 = self.plot_mpuZ.plot(pen='b', name='Z')
 
         self.time_sec = []
         self.strain_1 = []
         self.strain_2 = []
-        self.strain_b1 = []
-        self.strain_b2 = []
+        self.strain_B1 = []
+        self.strain_B2 = []
         self.force = []
         self.position = []
-        self.pitch = []
-        self.roll = []
-        self.acz1 = []
+        if self.two_sensors_flag:
+            self.force_B = []
+            self.position_B = []
+
+        if self.accelerations_flag:
+            self.pitch = []
+            self.roll = []
+            self.acz1 = []
 
         self.time_offset_check = True
         self.time_offset = 0
@@ -198,7 +222,8 @@ class RealTimePlotWindow(QtWidgets.QMainWindow):
                 self.timer.stop()
                 self.win_strain.close()
                 self.win_force_pos.close()
-                self.win_accel.close()
+                if self.accelerations_flag:
+                    self.win_accel.close()
                 return
 
             if line.startswith('$'):
@@ -214,8 +239,9 @@ class RealTimePlotWindow(QtWidgets.QMainWindow):
                 time_sec = float(data[0]) * 1e-6
                 strain_1 = float(data[1]) * SUPPLY_VOLTAGE / (RESOLUTION * GAIN)
                 strain_2 = float(data[2]) * SUPPLY_VOLTAGE / (RESOLUTION * GAIN)
-                strain_b1 =0# float(data[0]) * SUPPLY_VOLTAGE / (RESOLUTION * GAIN)
-                strain_b2 =0# float(data[0]) * SUPPLY_VOLTAGE / (RESOLUTION * GAIN)
+                strain_B1 = float(data[3]) * SUPPLY_VOLTAGE / (RESOLUTION * GAIN)
+                strain_B2 = float(data[4]) * SUPPLY_VOLTAGE / (RESOLUTION * GAIN)
+                
                 acx1 =0# float(data[3])
                 acy1 =0# float(data[4])
                 acz1 =0# float(data[5])
@@ -229,7 +255,7 @@ class RealTimePlotWindow(QtWidgets.QMainWindow):
             time_sec -= self.time_offset
 
             now = datetime.now()
-            self.csvwriter.writerow([time_sec, strain_1, strain_2, strain_b1, strain_b2, acx1, acy1, acz1, now.time()])
+            self.csvwriter.writerow([time_sec, strain_1, strain_2, strain_B1, strain_B2, acx1, acy1, acz1, now.time()])
             self.csvfile.flush()
 
             # Calculate force and position and angles
@@ -237,38 +263,53 @@ class RealTimePlotWindow(QtWidgets.QMainWindow):
             position = (self.k_2 * self.d_2 * (strain_1 - self.c_1) - self.k_1 * self.d_1 * (strain_2 - self.c_2)) / (self.k_2 * (strain_1 - self.c_1) - self.k_1 * (strain_2 - self.c_2))
             position = 0 if position > 0.30 or position < -0.30 else position
 
-            # Calculate pitch and roll (in radians) 
-            x_g = acx1*self.m_x + self.b_x
-            y_g = acy1*self.m_y + self.b_y
-            z_g = acz1*self.m_z + self.b_z
-            theta_x = np.arctan2(-y_g, np.sqrt(x_g**2 + z_g**2))  # Angle about global x-axis
-            theta_y = np.arctan2(x_g, np.sqrt(y_g**2 + z_g**2))  # Angle about global y-axis
+            if self.two_sensors_flag:
+                force_B = (self.k_B2 * (strain_B1 - self.c_B1) - self.k_B1 * (strain_B2 - self.c_B2)) / (self.k_B1 * self.k_B2 * (self.d_B2 - self.d_B1))
+                position_B = (self.k_B2 * self.d_B2 * (strain_B1 - self.c_B1) - self.k_B1 * self.d_B1 * (strain_B2 - self.c_B2)) / (self.k_B2 * (strain_B1 - self.c_B1) - self.k_B1 * (strain_B2 - self.c_B2))
+                position_B = 0 if position_B > 0.30 or position_B < -0.30 else position_B
 
-            x_angle = np.degrees(theta_x)
-            y_angle = np.degrees(theta_y)
+            if self.accelerations_flag:
+                # Calculate pitch and roll (in radians) 
+                x_g = acx1*self.m_x + self.b_x
+                y_g = acy1*self.m_y + self.b_y
+                z_g = acz1*self.m_z + self.b_z
+                theta_x = np.arctan2(-y_g, np.sqrt(x_g**2 + z_g**2))  # Angle about global x-axis
+                theta_y = np.arctan2(x_g, np.sqrt(y_g**2 + z_g**2))  # Angle about global y-axis
+
+                x_angle = np.degrees(theta_x)
+                y_angle = np.degrees(theta_y)
 
             increment = 0.05
             if time_sec - self.plot_time > increment:
                 self.time_sec.append(time_sec)
                 self.strain_1.append(strain_1)
                 self.strain_2.append(strain_2)
-                self.strain_b1.append(strain_b1)
-                self.strain_b2.append(strain_b2)
+                self.strain_B1.append(strain_B1)
+                self.strain_B2.append(strain_B2)
                 self.force.append(force)
                 self.position.append(position * 100)
-                self.pitch.append(x_angle)
-                self.roll.append(y_angle)
-                self.acz1.append(z_g)
+                if self.two_sensors_flag:
+                    self.force_B.append(force_B)
+                    self.position_B.append(position_B * 100)
+
+                if self.accelerations_flag:
+                    self.pitch.append(x_angle)
+                    self.roll.append(y_angle)
+                    self.acz1.append(z_g)
 
                 self.curve_1.setData(self.time_sec, self.strain_1)
                 self.curve_2.setData(self.time_sec, self.strain_2)
-                self.curve_b1.setData(self.time_sec, self.strain_b1)
-                self.curve_b2.setData(self.time_sec, self.strain_b2)
+                self.curve_B1.setData(self.time_sec, self.strain_B1)
+                self.curve_B2.setData(self.time_sec, self.strain_B2)
                 self.curve_force.setData(self.time_sec, self.force)
                 self.curve_pos.setData(self.time_sec, self.position)
-                self.curve_pitch.setData(self.time_sec, self.pitch)
-                self.curve_roll.setData(self.time_sec, self.roll)
-                self.curve_z1.setData(self.time_sec, self.acz1)
+                if self.two_sensors_flag:
+                    self.curve_force_B.setData(self.time_sec, self.force_B)
+                    self.curve_pos_B.setData(self.time_sec, self.position_B)
+                if self.accelerations_flag:
+                    self.curve_pitch.setData(self.time_sec, self.pitch)
+                    self.curve_roll.setData(self.time_sec, self.roll)
+                    self.curve_z1.setData(self.time_sec, self.acz1)
 
                 x_min = max(0, self.time_sec[-1] - 10)
                 x_max = self.time_sec[-1]
@@ -276,8 +317,9 @@ class RealTimePlotWindow(QtWidgets.QMainWindow):
                 self.plot_2.setXRange(x_min, x_max)
                 self.plot_force.setXRange(x_min, x_max)
                 self.plot_pos.setXRange(x_min, x_max)
-                self.plot_mpuXY.setXRange(x_min, x_max)
-                self.plot_mpuZ.setXRange(x_min, x_max)
+                if self.accelerations_flag:
+                    self.plot_mpuXY.setXRange(x_min, x_max)
+                    self.plot_mpuZ.setXRange(x_min, x_max)
 
                 self.plot_time = time_sec
 
