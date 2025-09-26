@@ -458,9 +458,9 @@ class HardwareControlUI:
         # Prepare row data
         row = [
             datetime.now().strftime("%m_%d_%Y"),
-            coeff_data['A1']['k'], coeff_data['B1']['k'], coeff_data['A2']['k'], coeff_data['B2']['k'],
-            coeff_data['A1']['d'], coeff_data['B1']['d'], coeff_data['A2']['d'], coeff_data['B2']['d'],
-            coeff_data['A1']['c'], coeff_data['B1']['c'], coeff_data['A2']['c'], coeff_data['B2']['c']
+            coeff_data['A1']['k'], coeff_data['A2']['k'], coeff_data['B1']['k'], coeff_data['B2']['k'],
+            coeff_data['A1']['d'], coeff_data['A2']['d'], coeff_data['B1']['d'], coeff_data['B2']['d'],
+            coeff_data['A1']['c'], coeff_data['A2']['c'], coeff_data['B1']['c'], coeff_data['B2']['c']
         ]
 
         # Write to CSV

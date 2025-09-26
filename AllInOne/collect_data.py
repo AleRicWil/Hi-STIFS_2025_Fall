@@ -231,10 +231,9 @@ class RealTimePlotWindow(QtWidgets.QMainWindow):
                 return
 
             data = line.split(',')
-            if len(data) != 11-3-2:
+            if len(data) != 5:
                 self.status_queue.put("Invalid data packet")
                 
-
             try:
                 time_sec = float(data[0]) * 1e-6
                 strain_1 = float(data[1]) * SUPPLY_VOLTAGE / (RESOLUTION * GAIN)
@@ -260,13 +259,17 @@ class RealTimePlotWindow(QtWidgets.QMainWindow):
 
             # Calculate force and position and angles
             force = (self.k_2 * (strain_1 - self.c_1) - self.k_1 * (strain_2 - self.c_2)) / (self.k_1 * self.k_2 * (self.d_2 - self.d_1))
-            position = (self.k_2 * self.d_2 * (strain_1 - self.c_1) - self.k_1 * self.d_1 * (strain_2 - self.c_2)) / (self.k_2 * (strain_1 - self.c_1) - self.k_1 * (strain_2 - self.c_2))
-            position = 0 if position > 0.30 or position < -0.30 else position
+            num = (self.k_2 * self.d_2 * (strain_1 - self.c_1) - self.k_1 * self.d_1 * (strain_2 - self.c_2))
+            den = (self.k_2 * (strain_1 - self.c_1) - self.k_1 * (strain_2 - self.c_2))
+            position = num / den if abs(den) > 5e-4 else 0
+            position = 0 if position > 0.25 or position < -0.10 else position
 
             if self.two_sensors_flag:
                 force_B = (self.k_B2 * (strain_B1 - self.c_B1) - self.k_B1 * (strain_B2 - self.c_B2)) / (self.k_B1 * self.k_B2 * (self.d_B2 - self.d_B1))
-                position_B = (self.k_B2 * self.d_B2 * (strain_B1 - self.c_B1) - self.k_B1 * self.d_B1 * (strain_B2 - self.c_B2)) / (self.k_B2 * (strain_B1 - self.c_B1) - self.k_B1 * (strain_B2 - self.c_B2))
-                position_B = 0 if position_B > 0.30 or position_B < -0.30 else position_B
+                num = (self.k_B2 * self.d_B2 * (strain_B1 - self.c_B1) - self.k_B1 * self.d_B1 * (strain_B2 - self.c_B2))
+                den = (self.k_B2 * (strain_B1 - self.c_B1) - self.k_B1 * (strain_B2 - self.c_B2))
+                position_B =  num / den if abs(den) > 5e-4 else 0
+                position_B = 0 if position_B > 0.25 or position_B < -0.10 else position_B
 
             if self.accelerations_flag:
                 # Calculate pitch and roll (in radians) 

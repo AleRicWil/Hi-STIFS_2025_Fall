@@ -74,7 +74,7 @@ def run_calibration(port, config, status_queue):
                         line = ser.readline().decode('utf-8').strip()
                         data = line.split(',')
 
-                        if len(data) < 5:
+                        if len(data) != 5:
                             status_queue.put("Invalid data received: incomplete data packet")
                             continue
 
@@ -98,9 +98,9 @@ def run_calibration(port, config, status_queue):
                             strain_2 = float(data[2]) * SUPPLY_VOLTAGE / (RESOLUTION * GAIN)
                             strain_B1 = float(data[3]) * SUPPLY_VOLTAGE / (RESOLUTION * GAIN)
                             strain_B2 = float(data[4]) * SUPPLY_VOLTAGE / (RESOLUTION * GAIN)
-                            acx1 = float(data[3])
-                            acy1 = float(data[4])
-                            acz1 = float(data[5])
+                            # acx1 = float(data[3])
+                            # acy1 = float(data[4])
+                            # acz1 = float(data[5])
                         except (ValueError, IndexError):
                             status_queue.put("Invalid data received: cannot parse values")
                             continue
