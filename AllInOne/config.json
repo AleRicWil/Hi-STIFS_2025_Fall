@@ -1,7 +1,7 @@
 {
-    "configuration": "Integrated Beam Fillet 1",
-    "pvc_stiffness": "Vigor 2",
-    "height": 87.6,
+    "configuration": "Two Straights v1.0",
+    "pvc_stiffness": "Vigor 1 - Dirt",
+    "height": 90.0,
     "yaw": 15.0,
     "pitch": 0.0,
     "roll": 0.0,
