@@ -231,7 +231,7 @@ class LabStalkRow:
             params_read = 0 # track how many parameters have been read
             for row in self.header_rows:
                     # the first column of each row is the parameter name. The second column is the parameter's value
-                if row[0] == "rodney configuration":
+                if row[0] == "configuration":
                     self.configuration = row[1]
                     params_read += 1
                 if row[0] == "sensor calibration (k d c)":
@@ -241,8 +241,8 @@ class LabStalkRow:
                     d_str = row[2]
                     k_values = [float(v) for v in k_str.split()]
                     d_values = [float(v) for v in d_str.split()]
-                    self.k_1, self.k_B1, self.k_2, self.k_B2 = k_values
-                    self.d_1, self.d_B1, self.d_2, self.d_B2 = d_values
+                    self.k_1, self.k_2, self.k_B1, self.k_B2 = k_values
+                    self.d_1, self.d_2, self.d_B1, self.d_B2 = d_values
                     params_read += 1
                 if row[0] == "stalk array (lo med hi)":
                         # this is which block or section in the field (or synthetic stalk type in the lab)
@@ -266,11 +266,15 @@ class LabStalkRow:
             # store each column by its title and covert the pandas object to a numpy array
         self.time = data['Time'].to_numpy()
         self.strain_1 = self.strain_1_raw = data['Strain A1'].to_numpy()    # CSV labels as A1/A2 for backwards compatability with 4 channel sensors. This code
-        self.strain_2 = self.strain_2_raw = data['Strain A2'].to_numpy()    # only uses the two channels
+        self.strain_2 = self.strain_2_raw = data['Strain A2'].to_numpy() 
+        self.strain_B1 = self.strain_B1_raw = data['Strain B1'].to_numpy()
+        self.strain_B2 = self.strain_B2_raw = data['Strain B2'].to_numpy()
         mask = (self.time >= 0.001) & (self.time <= 600) & (np.diff(self.time, prepend=self.time[0]) >= 0)
         self.time = self.time[mask]
         self.strain_1 = self.strain_1_raw = self.strain_1_raw[mask]
         self.strain_2 = self.strain_2_raw = self.strain_2_raw[mask]
+        self.strain_B1 = self.strain_B1_raw = self.strain_B1_raw[mask]
+        self.strain_B2 = self.strain_B2_raw = self.strain_B2_raw[mask]
             # check if this data collection had an accelerometer
         self.accel_flag = False  #
         if 'AcX1' in data.columns:
@@ -285,6 +289,8 @@ class LabStalkRow:
     def smooth_raw_data(self, strain_window=20, strain_order=1, accel_window=50, accel_order=1):
         self.strain_1 = savgol_filter(self.strain_1, strain_window, strain_order)
         self.strain_2 = savgol_filter(self.strain_2, strain_window, strain_order)
+        self.strain_B1 = savgol_filter(self.strain_B1, strain_window, strain_order)
+        self.strain_B2 = savgol_filter(self.strain_B2, strain_window, strain_order)
         if self.accel_flag:
             self.acX = savgol_filter(self.acX, accel_window, accel_order)
             self.acY = savgol_filter(self.acY, accel_window, accel_order)
@@ -327,11 +333,15 @@ class LabStalkRow:
     def shift_initials(self, time_cutoff):
             cutoff_index = np.where(self.time - self.time[0] > time_cutoff)[0][0]
             self.strain_1_ini  = np.mean(self.strain_1[0:cutoff_index])
-            self.strain_2_ini = np.mean(self.strain_2[0:cutoff_index]) 
+            self.strain_2_ini = np.mean(self.strain_2[0:cutoff_index])
+            self.strain_B1_ini = np.mean(self.strain_B1[0:cutoff_index])
+            self.strain_B2_ini = np.mean(self.strain_B2[0:cutoff_index]) 
             self.c_1 = self.strain_1_ini
             self.c_2 = self.strain_2_ini
+            self.c_B1 = self.strain_B1_ini
+            self.c_B2 = self.strain_B2_ini
 
-    def calc_force_position(self, smooth=True, window=20, order=1, small_den_cutoff=5*1e-5):
+    def calc_force_position(self, smooth=True, window=20, order=1, small_den_cutoff=2.5*1e-5):
         self.force_num = self.k_2*(self.strain_1 - self.c_1) - self.k_1*(self.strain_2 - self.c_2)
         self.force_den = self.k_1*self.k_2*(self.d_2 - self.d_1)
         self.force = self.force_raw = np.where(self.force_num / self.force_den < 0, 0, self.force_num / self.force_den)
@@ -340,9 +350,19 @@ class LabStalkRow:
         self.pos_den = self.k_2*(self.strain_1 - self.c_1) - self.k_1*(self.strain_2 - self.c_2)
         self.position = self.position_raw = np.clip(np.where(np.abs(self.pos_den) < small_den_cutoff, 0, self.pos_num/self.pos_den), 0, 0.30)
 
+        self.force_numB = self.k_B2*(self.strain_B1 - self.c_B1) - self.k_B1*(self.strain_B2 - self.c_B2)
+        self.force_denB = self.k_B1*self.k_B2*(self.d_B2 - self.d_B1)
+        self.forceB = self.force_rawB = np.where(self.force_numB / self.force_denB < 0, 0, self.force_numB / self.force_denB)
+
+        self.pos_numB = self.k_B2*self.d_B2*(self.strain_B1 - self.c_B1) - self.k_B1*self.d_B1*(self.strain_B2 - self.c_B2)
+        self.pos_denB = self.k_B2*(self.strain_B1 - self.c_B1) - self.k_B1*(self.strain_B2 - self.c_B2)
+        self.positionB = self.position_rawB = np.clip(np.where(np.abs(self.pos_denB) < small_den_cutoff, 0, self.pos_numB/self.pos_denB), 0, 0.30)
+
         if smooth:
             self.force = savgol_filter(self.force, window, order)
             self.position = savgol_filter(self.position, window, order)
+            self.forceB = savgol_filter(self.forceB, window, order)
+            self.positionB = savgol_filter(self.positionB, window, order)
 
     def differentiate_force_position(self, smooth=True, window=20, order=1):
         self.force_DT = np.gradient(self.force, self.time)
@@ -458,12 +478,16 @@ class LabStalkRow:
         else:
             fig, ax = plt.subplots(2, 1, sharex=True, figsize=(9.5, 4.8))
         ax[0].plot(self.time - time_ini, self.force, label='Force')
-        ax[0].set_ylabel('Force (N)')
-        ax[1].plot(self.time - time_ini, self.position*100, label='Position')
         ax[0].plot(self.time - time_ini, self.force_raw, label='raw', linewidth=0.5)
+        ax[0].plot(self.time - time_ini, self.forceB, label='Force_B')
+        ax[0].set_ylabel('Force (N)')
+
+        ax[1].plot(self.time - time_ini, self.position*100, label='Position')
+        ax[1].plot(self.time - time_ini, self.positionB*100, label='Position_B')
         ax[1].plot(self.time - time_ini, self.position_raw*100, label='raw', linewidth=0.5)
         ax[1].set_xlabel('Time (s)')
         ax[1].set_ylabel('Position (cm)')
+
         if show_accels:
             ax[2].plot(self.time - time_ini, self.pitch_smooth, label='Pitch')
             ax[2].plot(self.time - time_ini, self.roll_smooth, label='Roll')
@@ -532,72 +556,68 @@ class LabStalkRow:
     def plot_raw_strain(self):
         fig, axs = plt.subplots(2, 2, sharex=True, sharey=True, figsize=(8, 6))
         axs[0, 0].plot(self.time, self.strain_1_raw, linewidth=0.3)
-        axs[0, 0].plot(self.time, self.a1_drift, linewidth=0.3)
         axs[0, 0].plot(self.time, self.strain_1, label='A1')
         axs[0, 0].axhline(self.strain_1_ini, c='red', linewidth=0.5)
         axs[0, 0].legend()
         axs[0, 1].plot(self.time, self.strain_2_raw, linewidth=0.3)
-        axs[0, 1].plot(self.time, self.a2_drift, linewidth=0.3)
         axs[0, 1].plot(self.time, self.strain_2, label='A2')
         axs[0, 1].axhline(self.strain_2_ini, c='red', linewidth=0.5)
         axs[0, 1].legend()
-        axs[1, 0].plot(self.time, self.strain_b1_raw, linewidth=0.3)
-        axs[1, 0].plot(self.time, self.b1_drift, linewidth=0.3)
-        axs[1, 0].plot(self.time, self.strain_b1, label='B1')
-        axs[1, 0].axhline(self.strain_b1_ini, c='red', linewidth=0.5)
+        axs[1, 0].plot(self.time, self.strain_B1_raw, linewidth=0.3)
+        axs[1, 0].plot(self.time, self.strain_B1, label='B1')
+        axs[1, 0].axhline(self.strain_B1_ini, c='red', linewidth=0.5)
         axs[1, 0].legend()
-        axs[1, 1].plot(self.time, self.strain_b2_raw, linewidth=0.3)
-        axs[1, 1].plot(self.time, self.b2_drift, linewidth=0.3)
-        axs[1, 1].plot(self.time, self.strain_b2, label='B2')
-        axs[1, 1].axhline(self.strain_b2_ini, c='red', linewidth=0.5)
+        axs[1, 1].plot(self.time, self.strain_B2_raw, linewidth=0.3)
+        axs[1, 1].plot(self.time, self.strain_B2, label='B2')
+        axs[1, 1].axhline(self.strain_B2_ini, c='red', linewidth=0.5)
         axs[1, 1].legend()
         plt.tight_layout()
 
-        if self.accel_flag:
-            max_x = np.max(self.acX)
-            min_x = np.min(self.acX)
-            mask_max_x = np.isclose(self.acX, max_x, atol=np.abs(max_x)*0.001)
-            self.time_x_max = self.time[mask_max_x]
-            self.acX1_max = self.acX[mask_max_x]
-            mask_min_x = np.isclose(self.acX, min_x, atol=np.abs(min_x)*0.001)
-            self.time_x_min = self.time[mask_min_x]
-            self.acX1_min = self.acX[mask_min_x]
+        # if self.accel_flag:
+        #     max_x = np.max(self.acX)
+        #     min_x = np.min(self.acX)
+        #     mask_max_x = np.isclose(self.acX, max_x, atol=np.abs(max_x)*0.001)
+        #     self.time_x_max = self.time[mask_max_x]
+        #     self.acX1_max = self.acX[mask_max_x]
+        #     mask_min_x = np.isclose(self.acX, min_x, atol=np.abs(min_x)*0.001)
+        #     self.time_x_min = self.time[mask_min_x]
+        #     self.acX1_min = self.acX[mask_min_x]
             
-            max_y = np.max(self.acY)
-            min_y = np.min(self.acY)
-            mask_max_y = np.isclose(self.acY, max_y, atol=np.abs(max_y)*0.001)
-            self.time_y_max = self.time[mask_max_y]
-            self.acY1_max = self.acY[mask_max_y]
-            mask_min_y = np.isclose(self.acY, min_y, atol=np.abs(min_y)*0.001)
-            self.time_y_min = self.time[mask_min_y]
-            self.acY1_min = self.acY[mask_min_y]
+        #     max_y = np.max(self.acY)
+        #     min_y = np.min(self.acY)
+        #     mask_max_y = np.isclose(self.acY, max_y, atol=np.abs(max_y)*0.001)
+        #     self.time_y_max = self.time[mask_max_y]
+        #     self.acY1_max = self.acY[mask_max_y]
+        #     mask_min_y = np.isclose(self.acY, min_y, atol=np.abs(min_y)*0.001)
+        #     self.time_y_min = self.time[mask_min_y]
+        #     self.acY1_min = self.acY[mask_min_y]
 
-            max_z = np.max(self.acZ)
-            min_z = np.min(self.acZ)
-            mask_max_z = np.isclose(self.acZ, max_z, atol=np.abs(max_z)*0.001)
-            self.time_z_max = self.time[mask_max_z]
-            self.acZ1_max = self.acZ[mask_max_z]
-            mask_min_z = np.isclose(self.acZ, min_z, atol=np.abs(min_z)*0.001)
-            self.time_z_min = self.time[mask_min_z]
-            self.acZ1_min = self.acZ[mask_min_z]
+        #     max_z = np.max(self.acZ)
+        #     min_z = np.min(self.acZ)
+        #     mask_max_z = np.isclose(self.acZ, max_z, atol=np.abs(max_z)*0.001)
+        #     self.time_z_max = self.time[mask_max_z]
+        #     self.acZ1_max = self.acZ[mask_max_z]
+        #     mask_min_z = np.isclose(self.acZ, min_z, atol=np.abs(min_z)*0.001)
+        #     self.time_z_min = self.time[mask_min_z]
+        #     self.acZ1_min = self.acZ[mask_min_z]
 
-            fig2, axs2 = plt.subplots(3, 1, sharex=True, sharey=False, figsize=(6, 8))
-            axs2[0].plot(self.time, self.acX_raw, linewidth=0.3)
-            axs2[0].plot(self.time, self.acX, label='acX')
-            axs2[0].scatter(self.time_x_max, self.acX1_max, c='red')
-            axs2[0].scatter(self.time_x_min, self.acX1_min, c='green')
-            axs2[0].legend()
-            axs2[1].plot(self.time, self.acY_raw, linewidth=0.3)
-            axs2[1].plot(self.time, self.acY, label='acY')
-            axs2[1].scatter(self.time_y_max, self.acY1_max, c='red')
-            axs2[1].scatter(self.time_y_min, self.acY1_min, c='green')
-            axs2[1].legend()
-            axs2[2].plot(self.time, self.acZ_raw, linewidth=0.3)
-            axs2[2].plot(self.time, self.acZ, label='acZ')
-            axs2[2].scatter(self.time_z_max, self.acZ1_max, c='red')
-            axs2[2].scatter(self.time_z_min, self.acZ1_min, c='green')
-            axs2[2].legend()
-            plt.tight_layout()
+        #     fig2, axs2 = plt.subplots(3, 1, sharex=True, sharey=False, figsize=(6, 8))
+        #     axs2[0].plot(self.time, self.acX_raw, linewidth=0.3)
+        #     axs2[0].plot(self.time, self.acX, label='acX')
+        #     axs2[0].scatter(self.time_x_max, self.acX1_max, c='red')
+        #     axs2[0].scatter(self.time_x_min, self.acX1_min, c='green')
+        #     axs2[0].legend()
+        #     axs2[1].plot(self.time, self.acY_raw, linewidth=0.3)
+        #     axs2[1].plot(self.time, self.acY, label='acY')
+        #     axs2[1].scatter(self.time_y_max, self.acY1_max, c='red')
+        #     axs2[1].scatter(self.time_y_min, self.acY1_min, c='green')
+        #     axs2[1].legend()
+        #     axs2[2].plot(self.time, self.acZ_raw, linewidth=0.3)
+        #     axs2[2].plot(self.time, self.acZ, label='acZ')
+        #     axs2[2].scatter(self.time_z_max, self.acZ1_max, c='red')
+        #     axs2[2].scatter(self.time_z_min, self.acZ1_min, c='green')
+        #     axs2[2].legend()
+        #     plt.tight_layout()
 
     def save_results(self, overwrite_result=False):
         # Prepare row data
@@ -869,7 +889,7 @@ def process_data(date, test_num, view=False, overwrite=False):
     if not local_run_flag:
         plt.show()
 
-def show_force_position(dates, test_nums, show_accels):
+def show_force_position(dates, test_nums, show_accels=False):
     for date in dates:
         for test_num in test_nums:
             test = LabStalkRow(date=date, test_num=test_num)
@@ -879,12 +899,13 @@ def show_force_position(dates, test_nums, show_accels):
                 test.calc_force_position()
                 test.differentiate_force_position()
                 test.differentiate_force_position_DT()
-                test.find_stalk_interaction()
-                test.collect_stalks()
-                test.calc_stalk_stiffnesses()
-                test.calc_angles()
+                # test.find_stalk_interaction()
+                # test.collect_stalks()
+                # test.calc_stalk_stiffnesses()
+                # test.calc_angles()
 
-                test.plot_force_position(view_stalks=True, show_accels=show_accels)
+                test.plot_raw_strain()
+                test.plot_force_position(view_stalks=False, show_accels=show_accels)
     plt.show()
 
 def correlation(rodney_config, date=None, stalk_type=None):
@@ -979,7 +1000,7 @@ if __name__ == "__main__":
     '''Batch run of same configuration'''
     # for i in range(1, 15+1):
     #     process_data(date='08_13', test_num=f'{i}', view=True, overwrite=True)
-    # show_force_position(dates=['08_06'], test_nums=[1])
+    show_force_position(dates=['09_29'], test_nums=[1,2,3,4,5,6,7,8,9,10])
 
     # boxplot_data(rodney_config='Integrated Beam Prototype 1', date='07_03', plot_num=104)
     # boxplot_data(rodney_config='Integrated Beam Prototype 2', date='07_10', plot_num=105)
@@ -1012,6 +1033,6 @@ if __name__ == "__main__":
     # Optimize parameters for a specific configuration
     # optimize_parameters(dates=['07_16'], rodney_config='Integrated Beam Printed Guide 1')
 
-    correlation(rodney_config='Integrated Beam Fillet 1', date='08_13')
+    # correlation(rodney_config='Integrated Beam Fillet 1', date='08_13')
 
     plt.show()

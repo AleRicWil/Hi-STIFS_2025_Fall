@@ -261,14 +261,14 @@ class RealTimePlotWindow(QtWidgets.QMainWindow):
             force = (self.k_2 * (strain_1 - self.c_1) - self.k_1 * (strain_2 - self.c_2)) / (self.k_1 * self.k_2 * (self.d_2 - self.d_1))
             num = (self.k_2 * self.d_2 * (strain_1 - self.c_1) - self.k_1 * self.d_1 * (strain_2 - self.c_2))
             den = (self.k_2 * (strain_1 - self.c_1) - self.k_1 * (strain_2 - self.c_2))
-            position = num / den if abs(den) > 5e-4 else 0
+            position = num / den if abs(den) > 2.5e-5 else 0
             position = 0 if position > 0.25 or position < -0.10 else position
 
             if self.two_sensors_flag:
                 force_B = (self.k_B2 * (strain_B1 - self.c_B1) - self.k_B1 * (strain_B2 - self.c_B2)) / (self.k_B1 * self.k_B2 * (self.d_B2 - self.d_B1))
                 num = (self.k_B2 * self.d_B2 * (strain_B1 - self.c_B1) - self.k_B1 * self.d_B1 * (strain_B2 - self.c_B2))
                 den = (self.k_B2 * (strain_B1 - self.c_B1) - self.k_B1 * (strain_B2 - self.c_B2))
-                position_B =  num / den if abs(den) > 5e-4 else 0
+                position_B =  num / den if abs(den) > 2.5e-5 else 0
                 position_B = 0 if position_B > 0.25 or position_B < -0.10 else position_B
 
             if self.accelerations_flag:
