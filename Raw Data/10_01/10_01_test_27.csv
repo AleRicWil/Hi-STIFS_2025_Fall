@@ -1,7 +1,7 @@
 user_note,,,,,
 configuration,Integrated Beam Fillet 1,,,,
 sensor calibration (k d c),-0.041405 -0.036453 -0.047827 -0.046712,0.007008 0.047981 0.00976 0.048638,0.348047 0.241149 -0.029535 0.115564,,
-stalk array (lo med hi),Vigor 2,,,,
+stalk array (lo med hi),Vigor 2 - 20deg,,,,
 sensor height (cm),89.0,,,,
 sensor yaw (degrees),20.0,,,,
 sensor pitch (degrees),0.0,,,,

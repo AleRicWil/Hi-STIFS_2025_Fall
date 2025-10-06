@@ -23,6 +23,7 @@ class StalkInteraction:
         self.fits = {}
         self.height = section.height
         self.yaw = section.yaw
+        print('yaw',self.yaw)
         self.B = section.max_position
 
         # Force vs deflection
@@ -198,6 +199,7 @@ class StalkInteraction:
         self.force = self.force[mask]
         self.position = self.position[mask]
         self.pos_x = self.pos_x[mask]
+        # print(self.pos_x)
 
         # Keep indices where x is strictly decreasing over reverse time
         keep_indices = [len(self.pos_x) - 1]
@@ -398,7 +400,7 @@ class FieldStalkSection:
             params_read = 0 # track how many parameters have been read
             for row in self.header_rows:
                     # the first column of each row is the parameter name. The second column is the parameter's value
-                if row[0] == "rodney configuration":
+                if row[0] == "configuration":
                     self.configuration = row[1]
                     params_read += 1
                 if row[0] == "sensor calibration (k d c)":
@@ -408,8 +410,8 @@ class FieldStalkSection:
                     d_str = row[2]
                     k_values = [float(v) for v in k_str.split()]
                     d_values = [float(v) for v in d_str.split()]
-                    self.k_1, self.k_B1, self.k_2, self.k_B2 = k_values
-                    self.d_1, self.d_B1, self.d_2, self.d_B2 = d_values
+                    self.k_1, self.k_2, self.k_B1, self.k_B2 = k_values
+                    self.d_1, self.d_2, self.d_B1, self.d_B2 = d_values
                     params_read += 1
                 if row[0] == "stalk array (lo med hi)":
                         # this is which block or section in the field (or synthetic stalk type in the lab)
@@ -607,8 +609,8 @@ class FieldStalkSection:
 
     def collect_stalks(self):
         if len(self.interaction_indices) == 0:
-            print('No interactions')
-            return
+            raise ValueError('No interactions to collect stalks')
+        
         
         gaps = np.diff(self.interaction_indices)
         split_points = np.where(gaps > self.stitch_gap_limit * 0.3)[0] + 1
@@ -932,30 +934,30 @@ class TestResults:
         date = parts[2]; stalk_type = parts[3]
 
         # Construct the CSV file path
-        d_path = os.path.join(filepath, f'darling_{date}_{stalk_type}.csv')
-        r_path = os.path.join(filepath, f'stiffness_{date}_{stalk_type}.csv')
+        # d_path = os.path.join(filepath, f'darling_{date}_{stalk_type}.csv')
+        h_path = os.path.join(filepath, f'stiffness_{date}_{stalk_type}.csv')
         
         # Read the CSV files
-        darling_df = pd.read_csv(d_path, index_col=0); rodney_df = pd.read_csv(r_path, index_col=0)
-        stalks_results = [rodney_df.loc[stalk].dropna().to_numpy() for stalk in rodney_df.index]
+        # darling_df = pd.read_csv(d_path, index_col=0)
+        HiSTIFS_df = pd.read_csv(h_path, index_col=0)
+        stalks_results = [HiSTIFS_df.loc[stalk][:-3].dropna().to_numpy() for stalk in HiSTIFS_df.index]
         
         plt.figure()
         for i, stalk in enumerate(stalks_results):
-            print(stalk)
-            plt.boxplot(stalk, positions=[i])
+            plt.boxplot(stalk, positions=[i+1], notch=True)
 
-        if correlation_flag:
-            d_means = darling_df['Mean']; d_medians = darling_df['Median']; d_stds = darling_df['Std_Dev']
-            r_means = rodney_df['Mean']; r_medians = rodney_df['Median']; r_stds = rodney_df['Std_Dev']
+        # if correlation_flag:
+        #     d_means = darling_df['Mean']; d_medians = darling_df['Median']; d_stds = darling_df['Std_Dev']
+        #     r_means = rodney_df['Mean']; r_medians = rodney_df['Median']; r_stds = rodney_df['Std_Dev']
             
-            slope, inter, r, _, _ = linregress(d_medians, r_medians)
+        #     slope, inter, r, _, _ = linregress(d_medians, r_medians)
             
-            plt.figure()
-            plt.scatter(d_medians, r_medians)
-            plt.plot(d_medians, d_medians, c='black', linewidth=0.5)
-            plt.plot(d_medians, slope*np.array(d_medians) + inter, c='orange', linewidth='0.5')
-            plt.title(f'Date: {date}, Section: {stalk_type}\n'+ rf'$R^2$: {r**2:.4f}, Slope: {slope:.3f}')
-            plt.axis('equal')
+        #     plt.figure()
+        #     plt.scatter(d_medians, r_medians)
+        #     plt.plot(d_medians, d_medians, c='black', linewidth=0.5)
+        #     plt.plot(d_medians, slope*np.array(d_medians) + inter, c='orange', linewidth='0.5')
+        #     plt.title(f'Date: {date}, Section: {stalk_type}\n'+ rf'$R^2$: {r**2:.4f}, Slope: {slope:.3f}')
+        #     plt.axis('equal')
     
 
 # Automatic processing
@@ -969,13 +971,13 @@ def show_force_position(dates, test_nums, show_accels):
                 test.calc_force_position()
                 test.differentiate_force_position()
                 test.differentiate_force_position_DT()
-                test.find_stalk_interaction()
-                test.collect_stalks()
-                test.calc_section_stiffnesses()
-                test.calc_angles()
+                # test.find_stalk_interaction()
+                # test.collect_stalks()
+                # test.calc_section_stiffnesses()
+                # test.calc_angles()
 
-                test.plot_force_position(view_stalks=True, show_accels=show_accels)
-                test.plot_section_stiffnesses()
+                test.plot_force_position(view_stalks=False, show_accels=show_accels)
+                # test.plot_section_stiffnesses()
     # plt.show()
 
 def show_accels(dates, test_nums):
@@ -1086,16 +1088,17 @@ def interactive_process_clipped_stalks(dates, select_spans=True):
             if response != 'y':
                 continue
             # Load one section for height, yaw, max_position
-            for test_num in range(1, 11):
+            subfolder = os.path.join(folder, os.path.join(stalk_type, 'Stalk Clips'))
+            csv_files = [f for f in os.listdir(subfolder) if f.endswith('.csv')]
+            parts = csv_files[0][:-4].split('_')
+            test_num = int(parts[1])
+            for test_num in range(test_num, test_num+10):
                 section = FieldStalkSection(date=date, test_num=test_num)
                 if section.exist:
                     break
             else:
                 continue
             dummy_section = type('DummySection', (), {'height': section.height, 'yaw': section.yaw, 'max_position': section.max_position})
-            
-            subfolder = os.path.join(folder, os.path.join(stalk_type, 'Stalk Clips'))
-            csv_files = [f for f in os.listdir(subfolder) if f.endswith('.csv')]
             
             stalk_dict = {}
             for csv_file in csv_files:
@@ -1159,7 +1162,6 @@ def show_section_results_interactive(dates, stalk_types, correlation_flag=False)
                 print(f'No results for type {stalk_type} on date {date}')
                 continue
             if not (all(os.path.exists(os.path.join(subfolder, x)) for x in ['Stalk Clips', 'Stalk Traces']) and 
-                any(f.startswith('darling') for f in os.listdir(subfolder)) and 
                 any(f.startswith('stiffness') for f in os.listdir(subfolder))):
                 print(f'Required folders or files missing in subfolder {subfolder}')
                 continue
@@ -1250,10 +1252,10 @@ def show_day_results_interactive(dates, stalk_types, n=0):
 
 
 if __name__ == '__main__':
-    # show_force_position(dates=['08_19'], test_nums=range(1, 10+1), show_accels=False)
-    # display_and_clip_tests(dates=['08_19'], test_nums=range(1, 10+1), num_stalks=9)
-    # interactive_process_clipped_stalks(dates=['08_22'], select_spans=False)
-    # show_section_results_interactive(dates=['08_07'], stalk_types=['15-A WE'])
+    # show_force_position(dates=['09_30'], test_nums=range(21, 30+1), show_accels=False)
+    # display_and_clip_tests(dates=['09_30'], test_nums=range(21, 30+1), num_stalks=17) 
+    # interactive_process_clipped_stalks(dates=['09_30'], select_spans=True)
+    show_section_results_interactive(dates=['09_30'], stalk_types=['Vigor 2 - 15degWind'])
     # show_day_results_interactive(dates=['08_07'], stalk_types=['11-B WE', '12-C WE', '13-B WE'])
     # show_day_results_interactive(dates=['08_07'], stalk_types=['11-B WE', '12-C WE', '13-B WE', '15-A WE'], n=1)
 
@@ -1263,7 +1265,7 @@ if __name__ == '__main__':
     # show_day_results_interactive(dates=['08_22'], stalk_types=['7-A Iso'], n=1)
 
     # show_day_results_interactive(dates=['08_19'], stalk_types=['med'])
-    show_day_results_interactive(dates=['08_22', '08_07'], stalk_types=['7-A Iso', '7-B Iso', '6-A Iso', '10-A Iso', '8-C Iso', '11-B WE', '12-C WE', '13-B WE', '15-A WE'], n=1)
+    # show_day_results_interactive(dates=['08_22', '08_07'], stalk_types=['7-A Iso', '7-B Iso', '6-A Iso', '10-A Iso', '8-C Iso', '11-B WE', '12-C WE', '13-B WE', '15-A WE'], n=1)
 
     # show_accels(dates=['08_13'], test_nums=[3])
     # process_and_store_section(dates=['08_22'], test_nums=range(1, 10+1))
