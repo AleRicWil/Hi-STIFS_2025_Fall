@@ -359,6 +359,278 @@ class StalkInteraction:
             self.stiffness = np.nan
 
 
+class StalkInteractionPair:
+    def __init__(self, front, rear, section):
+        self.time_f = front['Time']
+        self.force_f = front['Force']
+        self.position_f = front['Position']
+        self.time_r = rear['Time']
+        self.force_r = rear['Force']
+        self.position_r = rear['Position']
+
+        self.height = section.height
+        self.B = section.max_position
+        self.yaw = section.yaw   
+        self.sensor_deflect = 0.07 # meters
+
+        self.alpha = np.radians(10)
+        self.def_f =  0.0
+        self.def_r =  self.sensor_deflect/np.cos(self.alpha)
+        
+        self.stiffness = None
+
+    def interactive_calc_stiffness(self, stalk_num, test_num, date, stalk_type):
+        from matplotlib.gridspec import GridSpec
+        # Discard all position = 0
+        mask_f = self.position_f != 0
+        self.time_f = self.time_f[mask_f]
+        self.force_f = self.force_f[mask_f]
+        self.position_f = self.position_f[mask_f]
+
+        mask_r = self.position_r != 0
+        self.time_r = self.time_r[mask_r]
+        self.force_r = self.force_r[mask_r]
+        self.position_r = self.position_r[mask_r]
+
+        # Filter front data to keep indices where position_f is non-increasing
+        keep_indices_f = [np.argmax(self.position_f)]  # Start with the max index
+        print(keep_indices_f)
+        for i in range(keep_indices_f[0], len(self.position_f)):
+            if self.position_f[i] <= self.position_f[keep_indices_f[-1]]:
+                keep_indices_f.append(i)
+
+        # Check if enough points remain
+        if len(keep_indices_f) < 10:
+            self.stiffness_f = np.nan
+        else:
+            # Filter front arrays using keep_indices_f
+            self.time_f = np.array([self.time_f[i] for i in keep_indices_f])
+            self.force_f = np.array([self.force_f[i] for i in keep_indices_f])
+            self.position_f = np.array([self.position_f[i] for i in keep_indices_f])
+
+        # Filter rear data to keep indices where position_r is non-increasing
+        keep_indices_r = [np.argmax(self.position_r)]  # Start with the first index
+        for i in range(keep_indices_r[0], len(self.position_r)):
+            if self.position_r[i] <= self.position_r[keep_indices_r[-1]]:
+                keep_indices_r.append(i)
+
+        # Check if enough points remain
+        if len(keep_indices_r) < 10:
+            self.stiffness_r = np.nan
+        else:
+            # Filter rear arrays using keep_indices_r
+            self.time_r = np.array([self.time_r[i] for i in keep_indices_r])
+            self.force_r = np.array([self.force_r[i] for i in keep_indices_r])
+            self.position_r = np.array([self.position_r[i] for i in keep_indices_r])
+
+        # Create figure with GridSpec for two halves
+        fig = plt.figure(figsize=(12, 9))  # Adjusted width for two halves
+        gs = GridSpec(2, 4, figure=fig, height_ratios=[1, 1], width_ratios=[1, 1, 1, 1])
+
+        # Left half (front, 'f') - Top row
+        ax_f_force = fig.add_subplot(gs[0, 0])  # Spans first two columns
+        ax_f_position = fig.add_subplot(gs[0, 1], sharex=ax_f_force)  # Spans last two columns
+        # Left half - Bottom row
+        ax_f_force_pos = fig.add_subplot(gs[1, 0:2])  # Full width of left half
+
+        # Right half (rear, 'r') - Top row
+        ax_r_force = fig.add_subplot(gs[0, 2], sharex=None)  # Spans last two columns
+        ax_r_position = fig.add_subplot(gs[0, 3], sharex=ax_r_force)  # Spans beyond (adjusted below)
+        # Right half - Bottom row
+        ax_r_force_pos = fig.add_subplot(gs[1, 2:4])  # Full width of right half
+
+        # Adjust GridSpec to ensure proper column allocation
+        gs.update(wspace=0.4, hspace=0.4)  # Spacing between subplots
+
+        # Set figure window position
+        fig.canvas.manager.window.setGeometry(100, 100, 1200, 900)  # Adjusted for wider figure
+
+        # Gradient color based on time - Front
+        indices_f = np.arange(len(self.time_f))
+        norm_f = plt.Normalize(indices_f.min(), indices_f.max())
+        cmap = plt.get_cmap('viridis')
+
+        # Gradient color based on time - Rear
+        indices_r = np.arange(len(self.time_r))
+        norm_r = plt.Normalize(indices_r.min(), indices_r.max())
+
+        # Front plots
+        ax_f_force.scatter(self.time_f, self.force_f, s=5, c=indices_f, cmap=cmap, norm=norm_f)
+        ax_f_force.set_ylabel('Force (N)')
+        ax_f_force.set_xlabel('Time (s)')
+        ax_f_force.set_title('Front: Force vs Time')
+
+        ax_f_position.scatter(self.time_f, self.position_f, s=5, c=indices_f, cmap=cmap, norm=norm_f)
+        ax_f_position.set_ylabel('Position (m)')
+        ax_f_position.set_xlabel('Time (s)')
+        ax_f_position.set_title('Front: Position vs Time')
+
+        ax_f_force_pos.scatter(self.position_f, self.force_f, s=5, c=indices_f, cmap=cmap, norm=norm_f)
+        ax_f_force_pos.set_ylabel('Force (N)')
+        ax_f_force_pos.set_xlabel('Position (m)')
+        ax_f_force_pos.set_title('Front: Force vs Position')
+
+        # Rear plots
+        ax_r_force.scatter(self.time_r, self.force_r, s=5, c=indices_r, cmap=cmap, norm=norm_r)
+        ax_r_force.set_ylabel('Force (N)')
+        ax_r_force.set_xlabel('Time (s)')
+        ax_r_force.set_title('Rear: Force vs Time')
+
+        ax_r_position.scatter(self.time_r, self.position_r, s=5, c=indices_r, cmap=cmap, norm=norm_r)
+        ax_r_position.set_ylabel('Position (m)')
+        ax_r_position.set_xlabel('Time (s)')
+        ax_r_position.set_title('Rear: Position vs Time')
+
+        ax_r_force_pos.scatter(self.position_r, self.force_r, s=5, c=indices_r, cmap=cmap, norm=norm_r)
+        ax_r_force_pos.set_ylabel('Force (N)')
+        ax_r_force_pos.set_xlabel('Position (m)')
+        ax_r_force_pos.set_title('Rear: Force vs Position')
+
+        # Overall figure title
+        plt.suptitle(f'Select spans on FvX for stiffness calculation\nStalk: {stalk_num}, Test: {test_num}')
+
+        # Select front and rear spans
+        self.selected_spans_f = []
+        self.current_span_f = None
+        self.current_span_patches_f = {'force_pos': None, 'force_time': None, 'pos_time': None}
+        self.selected_spans_r = []
+        self.current_span_r = None
+        self.current_span_patches_r = {'force_pos': None, 'force_time': None, 'pos_time': None}
+
+        def onselect_f(xmin, xmax):
+            # Clear previous spans
+            for patch in self.current_span_patches_f.values():
+                if patch:
+                    patch.remove()
+
+            self.current_span_f = (xmin, xmax)
+            # Convert position range to time range for force vs time and position vs time plots
+            time_mask = (self.position_f >= xmin) & (self.position_f <= xmax)
+            if np.any(time_mask):
+                time_min, time_max = np.min(self.time_f[time_mask]), np.max(self.time_f[time_mask])
+                # Draw spans on all plots
+                self.current_span_patches_f['force_time'] = ax_f_force.axvspan(time_min, time_max, alpha=0.5, facecolor='tab:blue')
+                self.current_span_patches_f['pos_time'] = ax_f_position.axvspan(time_min, time_max, alpha=0.5, facecolor='tab:blue')
+                self.current_span_patches_f['force_pos'] = ax_f_force_pos.axvspan(xmin, xmax, alpha=0.5, facecolor='tab:blue')
+            fig.canvas.draw_idle()
+
+        def onselect_r(xmin, xmax):
+            # Clear previous spans
+            for patch in self.current_span_patches_r.values():
+                if patch:
+                    patch.remove()
+
+            self.current_span_r = (xmin, xmax)
+            # Convert position range to time range for force vs time and position vs time plots
+            time_mask = (self.position_r >= xmin) & (self.position_r <= xmax)
+            if np.any(time_mask):
+                time_min, time_max = np.min(self.time_r[time_mask]), np.max(self.time_r[time_mask])
+                # Draw spans on all plots
+                self.current_span_patches_r['force_time'] = ax_r_force.axvspan(time_min, time_max, alpha=0.5, facecolor='tab:blue')
+                self.current_span_patches_r['pos_time'] = ax_r_position.axvspan(time_min, time_max, alpha=0.5, facecolor='tab:blue')
+                self.current_span_patches_r['force_pos'] = ax_r_force_pos.axvspan(xmin, xmax, alpha=0.5, facecolor='tab:blue')
+            fig.canvas.draw_idle()
+
+        span_f = SpanSelector(ax_f_force_pos, onselect_f, 'horizontal', useblit=True,
+                            props=dict(alpha=0.5, facecolor='tab:blue'))
+        span_r = SpanSelector(ax_r_force_pos, onselect_r, 'horizontal', useblit=True,
+                            props=dict(alpha=0.5, facecolor='tab:blue'))
+
+        def add(event):
+            if self.current_span_f and self.current_span_r:
+                self.selected_spans_f.append(self.current_span_f)
+                self.selected_spans_r.append(self.current_span_r)
+
+                # Convert position range to time range for green spans
+                time_mask = (self.position_f >= self.current_span_f[0]) & (self.position_f <= self.current_span_f[1])
+                if np.any(time_mask):
+                    time_min, time_max = np.min(self.time_f[time_mask]), np.max(self.time_f[time_mask])
+                    # Draw green spans on all plots
+                    ax_f_force.axvspan(time_min, time_max, alpha=0.3, facecolor='green')
+                    ax_f_position.axvspan(time_min, time_max, alpha=0.3, facecolor='green')
+                    ax_f_force_pos.axvspan(self.current_span_f[0], self.current_span_f[1], alpha=0.3, facecolor='green')
+
+                # Convert position range to time range for green spans
+                time_mask = (self.position_r >= self.current_span_r[0]) & (self.position_r <= self.current_span_r[1])
+                if np.any(time_mask):
+                    time_min, time_max = np.min(self.time_r[time_mask]), np.max(self.time_r[time_mask])
+                    # Draw green spans on all plots
+                    ax_r_force.axvspan(time_min, time_max, alpha=0.3, facecolor='green')
+                    ax_r_position.axvspan(time_min, time_max, alpha=0.3, facecolor='green')
+                    ax_r_force_pos.axvspan(self.current_span_r[0], self.current_span_r[1], alpha=0.3, facecolor='green')
+
+                # Clear current span
+                for patch in self.current_span_patches_f.values():
+                    if patch:
+                        patch.remove()
+                for patch in self.current_span_patches_r.values():
+                    if patch:
+                        patch.remove()
+
+                self.current_span_f = None
+                self.current_span_patches_f = {'force_pos': None, 'force_time': None, 'pos_time': None}
+                self.current_span_r = None
+                self.current_span_patches_r = {'force_pos': None, 'force_time': None, 'pos_time': None}
+                fig.canvas.draw_idle()
+            else:
+                print('Select span for FRONT and REAR')
+
+        def done(event):
+            if self.selected_spans_f and self.selected_spans_r:
+
+                mask = np.full(len(self.position_f), False)
+                for xmin, xmax in self.selected_spans_f:
+                    current_mask = (self.position_f >= xmin) & (self.position_f <= xmax)
+                    mask = np.logical_or(mask, current_mask)
+                selected_force_f = self.force_f[mask]
+                selected_pos_f = self.position_f[mask]
+                selected_time_f = self.time_f[mask]
+
+                mask = np.full(len(self.position_r), False)
+                for xmin, xmax in self.selected_spans_r:
+                    current_mask = (self.position_r >= xmin) & (self.position_r <= xmax)
+                    mask = np.logical_or(mask, current_mask)
+                selected_force_r = self.force_r[mask]
+                selected_pos_r = self.position_r[mask]
+                selected_time_r = self.time_r[mask]
+
+                # save_stalk(selected_time_f, selected_force_f, selected_pos_f)
+                if len(selected_time_f) >= 2 and len(selected_time_r) >= 2:
+                    avg_force_f = np.mean(selected_force_f)
+                    avg_force_r = np.mean(selected_force_r)
+                    
+                    self.stiffness = self.height**3 * (avg_force_r - avg_force_f) / (self.def_r - self.def_f) / 3
+                else:
+                    self.stiffness = np.nan
+            else:
+                self.stiffness = np.nan
+            plt.close(fig)
+
+        def reject(event):
+            self.stiffness = np.nan
+            plt.close(fig)
+
+        def save_stalk(time, force, position):
+            os.makedirs(f'Results/Field/{date}/{stalk_type}/Stalk Traces', exist_ok=True)
+            df = pd.DataFrame({'Time': time, 'Force': force, 'Position': position})
+            path = f'Results/Field/{date}/{stalk_type}/Stalk Traces/S{stalk_num:02d}_{test_num:02d}.csv'
+            df.to_csv(path, index=False)
+            print(f"Saved stalk {stalk_num} to {path}")  # Debug output
+
+        ax_add = plt.axes([0.6, 0.025, 0.1, 0.075])
+        btn_add = Button(ax_add, 'Add Span')
+        btn_add.on_clicked(add)
+
+        ax_done = plt.axes([0.7, 0.025, 0.1, 0.075])
+        btn_done = Button(ax_done, 'Done')
+        btn_done.on_clicked(done)
+
+        ax_reject = plt.axes([0.8, 0.025, 0.1, 0.075])
+        btn_reject = Button(ax_reject, 'Reject')
+        btn_reject.on_clicked(reject)
+
+        plt.show(block=True)
+
 class FieldStalkSection:
     def __init__(self, date, test_num, min_force_rate=-0.5, pos_accel_tol=0.8, force_accel_tol=700):
         # These params set the filter bounds for identifying which portions of the data are stalk interactions. These are ideally straight lines, increasing in
@@ -403,6 +675,10 @@ class FieldStalkSection:
                 if row[0] == "configuration":
                     self.configuration = row[1]
                     params_read += 1
+                    parts = self.configuration.split()
+                    self.two_sensor_flag = False
+                    if 'Two' in parts and 'Straights' in parts:
+                        self.two_sensor_flag = True
                 if row[0] == "sensor calibration (k d c)":
                         # c values are not used, instead calculated from initial idle values of each data collection
                         # read in the strings and convert to floats
@@ -435,11 +711,15 @@ class FieldStalkSection:
             # store each column by its title and covert the pandas object to a numpy array
         self.time = data['Time'].to_numpy()
         self.strain_1 = self.strain_1_raw = data['Strain A1'].to_numpy()    # CSV labels as A1/A2 for backwards compatability with 4 channel sensors. This code
-        self.strain_2 = self.strain_2_raw = data['Strain A2'].to_numpy()    # only uses the two channels
+        self.strain_2 = self.strain_2_raw = data['Strain A2'].to_numpy()
+        self.strain_B1 = self.strain_B1_raw = data['Strain B1'].to_numpy()
+        self.strain_B2 = self.strain_B2_raw = data['Strain B2'].to_numpy()
         mask = (self.time >= 0.001) & (self.time <= 600) & (np.diff(self.time, prepend=self.time[0]) >= 0)
         self.time = self.time[mask]
         self.strain_1 = self.strain_1_raw = self.strain_1_raw[mask]
         self.strain_2 = self.strain_2_raw = self.strain_2_raw[mask]
+        self.strain_B1 = self.strain_B1_raw = self.strain_B1_raw[mask]
+        self.strain_B2 = self.strain_B2_raw = self.strain_B2_raw[mask]
             # check if this data collection had an accelerometer
         self.accel_flag = False  #
         if 'AcX1' in data.columns:
@@ -454,6 +734,8 @@ class FieldStalkSection:
     def smooth_raw_data(self, strain_window=20, strain_order=1, accel_window=50, accel_order=1):
         self.strain_1 = savgol_filter(self.strain_1, strain_window, strain_order)
         self.strain_2 = savgol_filter(self.strain_2, strain_window, strain_order)
+        self.strain_B1 = savgol_filter(self.strain_B1, strain_window, strain_order)
+        self.strain_B2 = savgol_filter(self.strain_B2, strain_window, strain_order)
         if self.accel_flag:
             self.acX = savgol_filter(self.acX, accel_window, accel_order)
             self.acY = savgol_filter(self.acY, accel_window, accel_order)
@@ -475,8 +757,12 @@ class FieldStalkSection:
         cutoff_index = np.where(self.time - self.time[0] > time_cutoff)[0][0]
         self.strain_1_ini  = np.mean(self.strain_1[0:cutoff_index])
         self.strain_2_ini = np.mean(self.strain_2[0:cutoff_index]) 
+        self.strain_B1_ini = np.mean(self.strain_B1[0:cutoff_index])
+        self.strain_B2_ini = np.mean(self.strain_B2[0:cutoff_index]) 
         self.c_1 = self.strain_1_ini
         self.c_2 = self.strain_2_ini
+        self.c_B1 = self.strain_B1_ini
+        self.c_B2 = self.strain_B2_ini
 
     def calc_force_position(self, smooth=True, window=20, order=1, small_den_cutoff=5*1e-5):
         self.force_num = self.k_2*(self.strain_1 - self.c_1) - self.k_1*(self.strain_2 - self.c_2)
@@ -487,9 +773,19 @@ class FieldStalkSection:
         self.pos_den = self.k_2*(self.strain_1 - self.c_1) - self.k_1*(self.strain_2 - self.c_2)
         self.position = self.position_raw = np.clip(np.where(np.abs(self.pos_den) < small_den_cutoff, 0, self.pos_num/self.pos_den), 0, 0.30)
 
+        self.force_numB = self.k_B2*(self.strain_B1 - self.c_B1) - self.k_B1*(self.strain_B2 - self.c_B2)
+        self.force_denB = self.k_B1*self.k_B2*(self.d_B2 - self.d_B1)
+        self.forceB = self.force_rawB = np.where(self.force_numB / self.force_denB < 0, 0, self.force_numB / self.force_denB)
+
+        self.pos_numB = self.k_B2*self.d_B2*(self.strain_B1 - self.c_B1) - self.k_B1*self.d_B1*(self.strain_B2 - self.c_B2)
+        self.pos_denB = self.k_B2*(self.strain_B1 - self.c_B1) - self.k_B1*(self.strain_B2 - self.c_B2)
+        self.positionB = self.position_rawB = np.clip(np.where(np.abs(self.pos_denB) < small_den_cutoff, 0, self.pos_numB/self.pos_denB), 0, 0.30)
+
         if smooth:
             self.force = savgol_filter(self.force, window, order)
             self.position = savgol_filter(self.position, window, order)
+            self.forceB = savgol_filter(self.forceB, window, order)
+            self.positionB = savgol_filter(self.positionB, window, order)
 
     def plot_force_position(self, view_stalks=False, plain=True, show_accels=False):
         try:
@@ -497,18 +793,35 @@ class FieldStalkSection:
             time_end = self.stalks[-1].time_loc
         except:
             time_ini = 0
-            time_end = 10
+            time_end = 20
         if show_accels:
             fig, ax = plt.subplots(3, 1, sharex=True, figsize=(9.5, 4.8))
         else:
-            fig, ax = plt.subplots(2, 1, sharex=True, figsize=(9.5, 4.8))
-        ax[0].plot(self.time - time_ini, self.force, label='Force')
-        ax[0].set_ylabel('Force (N)')
-        ax[1].plot(self.time - time_ini, self.position*100, label='Position')
-        ax[0].plot(self.time - time_ini, self.force_raw, label='raw', linewidth=0.5)
-        ax[1].plot(self.time - time_ini, self.position_raw*100, label='raw', linewidth=0.5)
-        ax[1].set_xlabel('Time (s)')
-        ax[1].set_ylabel('Position (cm)')
+            if self.two_sensor_flag:
+                fig, ax = plt.subplots(4,1, sharex=True, figsize=(15,10))
+                ax[0].plot(self.time - time_ini, self.force, label='Force')
+                # ax[0].plot(self.time - time_ini, self.force_raw, label='raw', linewidth=0.5)
+                ax[0].set_ylabel('Force Rear (N)')
+
+                ax[1].plot(self.time - time_ini, self.forceB, label='Force_B')
+                ax[1].set_ylabel('Force Front (N)')
+                
+                ax[2].plot(self.time - time_ini, self.position*100, label='Position')
+                # ax[2].plot(self.time - time_ini, self.position_raw*100, label='raw', linewidth=0.5)
+                ax[2].set_ylabel('Position Rear (cm)')
+                
+                ax[3].plot(self.time - time_ini, self.positionB*100, label='Position_B')
+                ax[3].set_ylabel('Position Front (cm)')
+                ax[3].set_xlabel('Time (s)')
+            else:
+                fig, ax = plt.subplots(2, 1, sharex=True, figsize=(9.5, 4.8))
+                ax[0].plot(self.time - time_ini, self.force, label='Force')
+                ax[0].set_ylabel('Force (N)')
+                ax[1].plot(self.time - time_ini, self.position*100, label='Position')
+                ax[0].plot(self.time - time_ini, self.force_raw, label='raw', linewidth=0.5)
+                ax[1].plot(self.time - time_ini, self.position_raw*100, label='raw', linewidth=0.5)
+                ax[1].set_xlabel('Time (s)')
+                ax[1].set_ylabel('Position (cm)')
         if show_accels:
             ax[2].plot(self.time - time_ini, self.pitch_smooth, label='Pitch')
             ax[2].plot(self.time - time_ini, self.roll_smooth, label='Roll')
@@ -517,6 +830,7 @@ class FieldStalkSection:
 
         plt.suptitle(f'{self.configuration}, Date:{self.date}, Test #{self.test_num}\nStalks:{self.stalk_type}')
         plt.xlim(-2, time_end - time_ini + 2)
+        fig.canvas.manager.window.move(10, 10)
 
         if view_stalks:
             for stalk in self.stalks:
@@ -780,6 +1094,126 @@ class FieldStalkSection:
         fig.canvas.mpl_connect('close_event', lambda event: print(f"Closed window for Test {self.test_num}"))  # Debug
         fig.canvas.mpl_connect('key_press_event', on_key)
         # plt.ion()  # Enable interactive mode
+        plt.show()
+
+    def two_interactive_clip_and_save(self, num_stalks):
+        # Display force and position plots for user selection
+        fig, ax = plt.subplots(4,1, sharex=True, figsize=(16,10))
+        ax[0].plot(self.time, self.force, label='Force')
+        ax[0].set_ylabel('Force Rear (N)')
+
+        ax[1].plot(self.time, self.forceB, label='Force_B')
+        ax[1].set_ylabel('Force Front (N)')
+        
+        ax[2].plot(self.time, self.position*100, label='Position')
+        ax[2].set_ylabel('Position Rear (cm)')
+        
+        ax[3].plot(self.time, self.positionB*100, label='Position_B')
+        ax[3].set_ylabel('Position Front (cm)')
+        ax[3].set_xlabel('Time (s)')
+        plt.suptitle(f'{self.date} Test {self.test_num} {self.stalk_type}\nSelect {num_stalks} stalk interactions')
+        fig.canvas.manager.window.move(10, 10)
+
+        # Allow user to select spans from plotted data, from front and rear sensors
+        self.spans_f = []
+        self.spans_r = []
+        self.current_span_f = None
+        self.current_span_r = None
+        self.current_span_patch_f = None
+        self.current_span_patch_r = None
+        self.current_span_patch_f_force = None
+        self.current_span_patch_r_force = None
+
+        def onselect_f(xmin, xmax):
+            # Remove previous temporary front span if exists
+            if self.current_span_patch_f:
+                self.current_span_patch_f.remove()
+                self.current_span_patch_f_force.remove()
+            self.current_span_f = (xmin, xmax)
+            self.current_span_patch_f = ax[3].axvspan(xmin, xmax, alpha=0.5, color='tab:blue')
+            self.current_span_patch_f_force = ax[1].axvspan(xmin, xmax, alpha=0.5, color='tab:blue')
+            fig.canvas.draw_idle()
+            print('FRONT', self.current_span_f)
+
+        def onselect_r(xmin, xmax):
+            # Remove previous temporary rear span if exists
+            if self.current_span_patch_r:
+                self.current_span_patch_r.remove()
+                self.current_span_patch_r_force.remove()
+            self.current_span_r = (xmin, xmax)
+            self.current_span_patch_r = ax[2].axvspan(xmin, xmax, alpha=0.5, color='tab:blue')
+            self.current_span_patch_r_force = ax[0].axvspan(xmin, xmax, alpha=0.5, color='tab:blue')
+            fig.canvas.draw_idle()
+            print('REAR', self.current_span_r)
+
+        self.span_f = SpanSelector(ax[3], onselect_f, 'horizontal', useblit=True, 
+                                   props=dict(alpha=0.5, facecolor='tab:blue'))
+        self.span_r = SpanSelector(ax[2], onselect_r, 'horizontal', useblit=True, 
+                                   props=dict(alpha=0.5, facecolor='tab:blue'))
+        
+        # Create UI elements to save spans
+        def confirm(event):
+            if self.current_span_f and self.current_span_r:
+                print(f'Confirming spans: FRONT: {self.current_span_f}, REAR: {self.current_span_r}')
+                self.spans_f.append(self.current_span_f)
+                self.spans_r.append(self.current_span_r)
+                if self.current_span_patch_f: self.current_span_patch_f.remove(); self.current_span_patch_f_force.remove()
+                if self.current_span_patch_r: self.current_span_patch_r.remove(); self.current_span_patch_r_force.remove()
+                ax[3].axvspan(self.current_span_f[0], self.current_span_f[1], alpha=0.3, color='green')
+                ax[1].axvspan(self.current_span_f[0], self.current_span_f[1], alpha=0.3, color='red')
+                ax[2].axvspan(self.current_span_r[0], self.current_span_r[1], alpha=0.3, color='green')
+                ax[0].axvspan(self.current_span_r[0], self.current_span_r[1], alpha=0.3, color='red')
+                self.current_span_f = None
+                self.current_span_r = None
+                self.current_span_patch_f = None
+                self.current_span_patch_r = None
+                fig.canvas.draw_idle()
+                if len(self.spans_f) == num_stalks and len(self.spans_r) == num_stalks:
+                    save_stalks()
+                    plt.close(fig)
+            else: print('Front and Rear spans need to be selected to confirm')
+        #
+            # trigger confirm with button
+        ax_confirm = plt.axes([0.8, 0.025, 0.1, 0.075])
+        btn_confirm = Button(ax_confirm, 'Confirm')
+        btn_confirm.on_clicked(confirm)
+
+            # trigger confirm with 'enter' key
+        def on_key(event):
+            if event.key == 'enter':
+                confirm(event)
+        fig.canvas.mpl_connect('key_press_event', on_key)
+
+        # Save spans
+        def save_stalks():
+            os.makedirs(f'Results/Field/{self.date}/{self.stalk_type}/Stalk Clips', exist_ok=True)
+            for i, ((tmin_f, tmax_f), (tmin_r, tmax_r)) in enumerate(zip(self.spans_f, self.spans_r)):
+                # Clip 'f' span
+                mask_f = (self.time >= tmin_f) & (self.time <= tmax_f)
+                df_f = pd.DataFrame({
+                    'Time': self.time[mask_f],
+                    'Force': self.forceB[mask_f],
+                    'Position': self.positionB[mask_f],
+                    'Sensor': 'f'  # Metadata for easy filtering later
+                })
+
+                # Clip 'r' span
+                mask_r = (self.time >= tmin_r) & (self.time <= tmax_r)
+                df_r = pd.DataFrame({
+                    'Time': self.time[mask_r],
+                    'Force': self.force[mask_r],
+                    'Position': self.position[mask_r],
+                    'Sensor': 'r'  # Metadata for easy filtering later
+                })
+
+                # Combine and sort by time (optional but recommended for chronological consistency)
+                df = pd.concat([df_f, df_r]).sort_values('Time').reset_index(drop=True)
+
+                # Save to CSV
+                path = f'Results/Field/{self.date}/{self.stalk_type}/Stalk Clips/S{i+1:02d}_{self.test_num:02d}.csv'
+                df.to_csv(path, index=False)
+                print(f"Saved stalk {i+1} (both spans) to {path}")  # Updated debug output
+
         plt.show()
 
 
@@ -1074,7 +1508,10 @@ def display_and_clip_tests(dates, test_nums, show_accels=False, num_stalks=0):
                 test.differentiate_force_position_DT()
                 # test.calc_angles()
                 # test.plot_force_position(view_stalks=True, show_accels=show_accels)
-                test.interactive_clip_and_save(num_stalks)
+                if not test.two_sensor_flag: test.interactive_clip_and_save(num_stalks)
+                else: test.two_interactive_clip_and_save(num_stalks)
+
+            
     plt.show()
 
 def interactive_process_clipped_stalks(dates, select_spans=True):
@@ -1098,7 +1535,6 @@ def interactive_process_clipped_stalks(dates, select_spans=True):
                     break
             else:
                 continue
-            dummy_section = type('DummySection', (), {'height': section.height, 'yaw': section.yaw, 'max_position': section.max_position})
             
             stalk_dict = {}
             for csv_file in csv_files:
@@ -1107,10 +1543,23 @@ def interactive_process_clipped_stalks(dates, select_spans=True):
                 test_num = int(parts[1])
                 path = os.path.join(subfolder, csv_file)
                 df = pd.read_csv(path)
-                time = df['Time'].to_numpy()
-                force = df['Force'].to_numpy()
-                position = df['Position'].to_numpy()
-                stalk = StalkInteraction(time, force, position, dummy_section)
+
+                if not section.two_sensor_flag:
+                    time = df['Time'].to_numpy()
+                    force = df['Force'].to_numpy()
+                    position = df['Position'].to_numpy()
+                    stalk = StalkInteraction(time, force, position, section)
+                else:
+                    front = {'Time': df['Time'][df['Sensor'] == 'f'].to_numpy(),
+                             'Force': df['Force'][df['Sensor'] == 'f'].to_numpy(),
+                             'Position': df['Position'][df['Sensor'] == 'f'].to_numpy()}
+                    
+                    rear = {'Time': df['Time'][df['Sensor'] == 'r'].to_numpy(),
+                             'Force': df['Force'][df['Sensor'] == 'r'].to_numpy(),
+                             'Position': df['Position'][df['Sensor'] == 'r'].to_numpy()}
+
+                    stalk = StalkInteractionPair(front, rear, section)
+
                 if stalk_num not in stalk_dict:
                     stalk_dict[stalk_num] = []
                 stalk_dict[stalk_num].append((test_num, stalk))
@@ -1120,6 +1569,7 @@ def interactive_process_clipped_stalks(dates, select_spans=True):
                 results = []
                 for test_num, stalk in sorted(stalks):
                     if select_spans:
+                        # if test_num > 41:
                         stalk.interactive_calc_stiffness(stalk_num, test_num, date, stalk_type)
                     else:
                         stalk.recalc_stiffness(stalk_num, test_num, date, stalk_type)
@@ -1252,10 +1702,10 @@ def show_day_results_interactive(dates, stalk_types, n=0):
 
 
 if __name__ == '__main__':
-    # show_force_position(dates=['09_30'], test_nums=range(21, 30+1), show_accels=False)
-    # display_and_clip_tests(dates=['09_30'], test_nums=range(21, 30+1), num_stalks=17) 
-    # interactive_process_clipped_stalks(dates=['09_30'], select_spans=True)
-    show_section_results_interactive(dates=['09_30'], stalk_types=['Vigor 2 - 15degWind'])
+    # show_force_position(dates=['10_01'], test_nums=range(41, 41+1), show_accels=False)
+    display_and_clip_tests(dates=['10_01'], test_nums=range(42, 42+1), num_stalks=13) 
+    interactive_process_clipped_stalks(dates=['10_01'], select_spans=True)
+    # show_section_results_interactive(dates=['09_30'], stalk_types=['Vigor 2 - 15degWind'])
     # show_day_results_interactive(dates=['08_07'], stalk_types=['11-B WE', '12-C WE', '13-B WE'])
     # show_day_results_interactive(dates=['08_07'], stalk_types=['11-B WE', '12-C WE', '13-B WE', '15-A WE'], n=1)
 
