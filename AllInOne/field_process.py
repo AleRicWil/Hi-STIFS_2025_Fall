@@ -393,35 +393,46 @@ class StalkInteractionPair:
         self.position_r = self.position_r[mask_r]
 
         # Filter front data to keep indices where position_f is non-increasing
-        keep_indices_f = [np.argmax(self.position_f)]  # Start with the max index
-        print(keep_indices_f)
-        for i in range(keep_indices_f[0], len(self.position_f)):
-            if self.position_f[i] <= self.position_f[keep_indices_f[-1]]:
-                keep_indices_f.append(i)
+        if len(self.position_f) >= 1:
+            keep_indices_f = [np.argmax(self.position_f)]  # Start with the max index
+            for i in range(keep_indices_f[0], len(self.position_f)):
+                if self.position_f[i] <= self.position_f[keep_indices_f[-1]]:
+                    keep_indices_f.append(i)
 
-        # Check if enough points remain
-        if len(keep_indices_f) < 10:
-            self.stiffness_f = np.nan
+            # Check if enough points remain
+            if len(keep_indices_f) < 10:
+                print('Not enough points on front sensor. Setting force=0 at pos=0')
+                self.force_f = np.zeros(10)
+                self.position_f = np.zeros(10)
+                self.time_f = np.linspace(0, 1, 10)
+            else:
+                # Filter front arrays using keep_indices_f
+                self.time_f = np.array([self.time_f[i] for i in keep_indices_f])
+                self.force_f = np.array([self.force_f[i] for i in keep_indices_f])
+                self.position_f = np.array([self.position_f[i] for i in keep_indices_f])
         else:
-            # Filter front arrays using keep_indices_f
-            self.time_f = np.array([self.time_f[i] for i in keep_indices_f])
-            self.force_f = np.array([self.force_f[i] for i in keep_indices_f])
-            self.position_f = np.array([self.position_f[i] for i in keep_indices_f])
+            print('Not enough points on front sensor. Setting force=0 at pos=0')
+            self.force_f = np.zeros(10)
+            self.position_f = np.zeros(10)
+            self.time_f = np.linspace(0, 1, 10)
 
         # Filter rear data to keep indices where position_r is non-increasing
-        keep_indices_r = [np.argmax(self.position_r)]  # Start with the first index
-        for i in range(keep_indices_r[0], len(self.position_r)):
-            if self.position_r[i] <= self.position_r[keep_indices_r[-1]]:
-                keep_indices_r.append(i)
+        if len(self.position_r) >= 1:
+            keep_indices_r = [np.argmax(self.position_r)]  # Start with the first index
+            for i in range(keep_indices_r[0], len(self.position_r)):
+                if self.position_r[i] <= self.position_r[keep_indices_r[-1]]:
+                    keep_indices_r.append(i)
 
-        # Check if enough points remain
-        if len(keep_indices_r) < 10:
-            self.stiffness_r = np.nan
-        else:
-            # Filter rear arrays using keep_indices_r
-            self.time_r = np.array([self.time_r[i] for i in keep_indices_r])
-            self.force_r = np.array([self.force_r[i] for i in keep_indices_r])
-            self.position_r = np.array([self.position_r[i] for i in keep_indices_r])
+            # Check if enough points remain
+            if len(keep_indices_r) < 10:
+                self.stiffness = np.nan
+                print('Not enough points on rear sensor')
+                return
+            else:
+                # Filter rear arrays using keep_indices_r
+                self.time_r = np.array([self.time_r[i] for i in keep_indices_r])
+                self.force_r = np.array([self.force_r[i] for i in keep_indices_r])
+                self.position_r = np.array([self.position_r[i] for i in keep_indices_r])
 
         # Create figure with GridSpec for two halves
         fig = plt.figure(figsize=(12, 9))  # Adjusted width for two halves
@@ -577,7 +588,6 @@ class StalkInteractionPair:
 
         def done(event):
             if self.selected_spans_f and self.selected_spans_r:
-
                 mask = np.full(len(self.position_f), False)
                 for xmin, xmax in self.selected_spans_f:
                     current_mask = (self.position_f >= xmin) & (self.position_f <= xmax)
@@ -585,6 +595,7 @@ class StalkInteractionPair:
                 selected_force_f = self.force_f[mask]
                 selected_pos_f = self.position_f[mask]
                 selected_time_f = self.time_f[mask]
+                front = {'Time': selected_time_f, 'Force': selected_force_f, 'Position': selected_pos_f}
 
                 mask = np.full(len(self.position_r), False)
                 for xmin, xmax in self.selected_spans_r:
@@ -593,11 +604,12 @@ class StalkInteractionPair:
                 selected_force_r = self.force_r[mask]
                 selected_pos_r = self.position_r[mask]
                 selected_time_r = self.time_r[mask]
+                rear = {'Time': selected_time_r, 'Force': selected_force_r, 'Position': selected_pos_r}
 
-                # save_stalk(selected_time_f, selected_force_f, selected_pos_f)
+                save_stalk(front, rear)
                 if len(selected_time_f) >= 2 and len(selected_time_r) >= 2:
-                    avg_force_f = np.mean(selected_force_f)
-                    avg_force_r = np.mean(selected_force_r)
+                    avg_force_f = np.median(selected_force_f)
+                    avg_force_r = np.median(selected_force_r)
                     
                     self.stiffness = self.height**3 * (avg_force_r - avg_force_f) / (self.def_r - self.def_f) / 3
                 else:
@@ -610,9 +622,19 @@ class StalkInteractionPair:
             self.stiffness = np.nan
             plt.close(fig)
 
-        def save_stalk(time, force, position):
+        def save_stalk(front, rear):
             os.makedirs(f'Results/Field/{date}/{stalk_type}/Stalk Traces', exist_ok=True)
-            df = pd.DataFrame({'Time': time, 'Force': force, 'Position': position})
+            
+            df_f = pd.DataFrame({'Time': front['Time'], 
+                               'Force': front['Force'], 
+                               'Position': front['Position'],
+                               'Sensor': 'f'})
+            df_r = pd.DataFrame({'Time': rear['Time'], 
+                               'Force': rear['Force'], 
+                               'Position': rear['Position'],
+                               'Sensor': 'r'})
+            df = pd.concat([df_f, df_r]).sort_values('Time').reset_index(drop=True)
+    
             path = f'Results/Field/{date}/{stalk_type}/Stalk Traces/S{stalk_num:02d}_{test_num:02d}.csv'
             df.to_csv(path, index=False)
             print(f"Saved stalk {stalk_num} to {path}")  # Debug output
@@ -1514,16 +1536,23 @@ def display_and_clip_tests(dates, test_nums, show_accels=False, num_stalks=0):
             
     plt.show()
 
-def interactive_process_clipped_stalks(dates, select_spans=True):
+def interactive_process_clipped_stalks(dates, types_to_process=None, select_spans=True):
     for date in dates:
         folder = f'Results/Field/{date}'
         if not os.path.exists(folder):
             continue
+        
         stalk_types = [d for d in os.listdir(folder) if os.path.isdir(os.path.join(folder, d))]
         for stalk_type in stalk_types:
-            response = input(f"Process stalk type '{stalk_type}'? (y/n): ").strip().lower()
-            if response != 'y':
+            if types_to_process is None:
+                response = input(f"Process stalk type '{stalk_type}'? (y/n): ").strip().lower()
+                if response != 'y':
+                    continue
+            elif stalk_type not in types_to_process:
+                print(f'Skipped stalks from {stalk_type}')
                 continue
+        
+            print(f'Processing from {stalk_type}')
             # Load one section for height, yaw, max_position
             subfolder = os.path.join(folder, os.path.join(stalk_type, 'Stalk Clips'))
             csv_files = [f for f in os.listdir(subfolder) if f.endswith('.csv')]
@@ -1703,8 +1732,8 @@ def show_day_results_interactive(dates, stalk_types, n=0):
 
 if __name__ == '__main__':
     # show_force_position(dates=['10_01'], test_nums=range(41, 41+1), show_accels=False)
-    display_and_clip_tests(dates=['10_01'], test_nums=range(42, 42+1), num_stalks=13) 
-    interactive_process_clipped_stalks(dates=['10_01'], select_spans=True)
+    # display_and_clip_tests(dates=['10_01'], test_nums=range(51, 60+1), num_stalks=13) 
+    interactive_process_clipped_stalks(dates=['10_01'], types_to_process=['Vigor 1 - 2SDirt'], select_spans=True)
     # show_section_results_interactive(dates=['09_30'], stalk_types=['Vigor 2 - 15degWind'])
     # show_day_results_interactive(dates=['08_07'], stalk_types=['11-B WE', '12-C WE', '13-B WE'])
     # show_day_results_interactive(dates=['08_07'], stalk_types=['11-B WE', '12-C WE', '13-B WE', '15-A WE'], n=1)
