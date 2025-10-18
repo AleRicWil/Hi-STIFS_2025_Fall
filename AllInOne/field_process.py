@@ -9,8 +9,7 @@ from scipy.signal import savgol_filter
 from scipy.stats import linregress
 import json
 
-local_run_flag = False
-results = []
+myTimeCutoff = 0.5
 
 class StalkInteraction:
     def __init__(self, time, force, position, section):
@@ -815,24 +814,25 @@ class FieldStalkSection:
             time_end = self.stalks[-1].time_loc
         except:
             time_ini = 0
-            time_end = 20
+            time_sep = 4.47
+            time_end = self.time[-1]
         if show_accels:
             fig, ax = plt.subplots(3, 1, sharex=True, figsize=(9.5, 4.8))
         else:
             if self.two_sensor_flag:
                 fig, ax = plt.subplots(4,1, sharex=True, figsize=(15,10))
-                ax[0].plot(self.time - time_ini, self.force, label='Force')
+                ax[0].plot(self.time - time_sep, self.force, label='Force')
                 # ax[0].plot(self.time - time_ini, self.force_raw, label='raw', linewidth=0.5)
                 ax[0].set_ylabel('Force Rear (N)')
 
-                ax[1].plot(self.time - time_ini, self.forceB, label='Force_B')
+                ax[1].plot(self.time, self.forceB, label='Force_B')
                 ax[1].set_ylabel('Force Front (N)')
                 
-                ax[2].plot(self.time - time_ini, self.position*100, label='Position')
+                ax[2].plot(self.time - time_sep, self.position*100, label='Position')
                 # ax[2].plot(self.time - time_ini, self.position_raw*100, label='raw', linewidth=0.5)
                 ax[2].set_ylabel('Position Rear (cm)')
                 
-                ax[3].plot(self.time - time_ini, self.positionB*100, label='Position_B')
+                ax[3].plot(self.time, self.positionB*100, label='Position_B')
                 ax[3].set_ylabel('Position Front (cm)')
                 ax[3].set_xlabel('Time (s)')
             else:
@@ -1423,7 +1423,7 @@ def show_force_position(dates, test_nums, show_accels):
             test = FieldStalkSection(date=date, test_num=test_num)
             if test.exist:
                 test.smooth_raw_data()
-                test.shift_initials(time_cutoff=1.0)
+                test.shift_initials(time_cutoff=myTimeCutoff)
                 test.calc_force_position()
                 test.differentiate_force_position()
                 test.differentiate_force_position_DT()
@@ -1453,7 +1453,7 @@ def process_and_store_section(dates, test_nums):
             test = FieldStalkSection(date=date, test_num=test_num)
             if test.exist:
                 test.smooth_raw_data()
-                test.shift_initials(time_cutoff=1.0)
+                test.shift_initials(time_cutoff=myTimeCutoff)
                 test.calc_force_position()
                 test.differentiate_force_position()
                 test.differentiate_force_position_DT()
@@ -1524,7 +1524,7 @@ def display_and_clip_tests(dates, test_nums, show_accels=False, num_stalks=0):
             if test.exist:
                 print(test_num)
                 test.smooth_raw_data()
-                test.shift_initials(time_cutoff=1.0)
+                test.shift_initials(time_cutoff=myTimeCutoff)
                 test.calc_force_position()
                 test.differentiate_force_position()
                 test.differentiate_force_position_DT()
@@ -1731,10 +1731,12 @@ def show_day_results_interactive(dates, stalk_types, n=0):
 
 
 if __name__ == '__main__':
-    # show_force_position(dates=['10_01'], test_nums=range(41, 41+1), show_accels=False)
-    # display_and_clip_tests(dates=['10_01'], test_nums=range(51, 60+1), num_stalks=13) 
-    interactive_process_clipped_stalks(dates=['10_01'], types_to_process=['Vigor 1 - 2SDirt'], select_spans=True)
-    # show_section_results_interactive(dates=['09_30'], stalk_types=['Vigor 2 - 15degWind'])
+    
+    myDates = ['10_01']; myTestNums = range(51, 60+1); myTypesToProcess = ['Vigor 1 - 2SDirt']
+    # show_force_position(dates=myDates, test_nums=myTestNums, show_accels=False)
+    # display_and_clip_tests(dates=myDates, test_nums=myTestNums, num_stalks=13) 
+    interactive_process_clipped_stalks(dates=myDates, types_to_process=myTypesToProcess, select_spans=True)
+    # show_section_results_interactive(dates=myDates, stalk_types=myTypesToProcess)
     # show_day_results_interactive(dates=['08_07'], stalk_types=['11-B WE', '12-C WE', '13-B WE'])
     # show_day_results_interactive(dates=['08_07'], stalk_types=['11-B WE', '12-C WE', '13-B WE', '15-A WE'], n=1)
 
