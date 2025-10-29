@@ -1735,7 +1735,7 @@ if __name__ == '__main__':
     myDates = ['10_01']; myTestNums = range(51, 60+1); myTypesToProcess = ['Vigor 1 - 2SDirt']
     # show_force_position(dates=myDates, test_nums=myTestNums, show_accels=False)
     # display_and_clip_tests(dates=myDates, test_nums=myTestNums, num_stalks=13) 
-    interactive_process_clipped_stalks(dates=myDates, types_to_process=myTypesToProcess, select_spans=True)
+    # interactive_process_clipped_stalks(dates=myDates, types_to_process=myTypesToProcess, select_spans=True)
     # show_section_results_interactive(dates=myDates, stalk_types=myTypesToProcess)
     # show_day_results_interactive(dates=['08_07'], stalk_types=['11-B WE', '12-C WE', '13-B WE'])
     # show_day_results_interactive(dates=['08_07'], stalk_types=['11-B WE', '12-C WE', '13-B WE', '15-A WE'], n=1)
@@ -1754,5 +1754,35 @@ if __name__ == '__main__':
     # show_day_results(date='08_07', correlation_flag=True)
     
     
+    cv_dirt = np.array([0.1651932,  0.5,        0.11421431, 0.1061719,  0.05633551, 0.10093206,
+                        0.35470862, 0.11357931, 0.21347642, 0.30801587, 0.15951702, 0.12420839,
+                        0.19017683, 0.35939948, 0.33701432, 0.22981235, 0.14935651, 0.40948684,
+                        0.20189415])
+    
+    pd1 = pd.read_csv(r'Results\Field\10_01\Vigor 1 - 15deg\stiffness_10_01_Vigor 1 - 15deg.csv')
+    pd2 = pd.read_csv(r'Results\Field\10_01\Vigor 2 - 15deg\stiffness_10_01_Vigor 2 - 15deg.csv')
+
+    stiff1 = pd1['Median'].to_numpy()
+    stdev1 = pd1['Std_Dev'].to_numpy()
+    cv1 = stdev1 / stiff1
+    stiff2 = pd2['Median'].to_numpy()
+    stdev2 = pd2['Std_Dev'].to_numpy()
+    cv2 = stdev2 / stiff2
+  
+
+    cv_board = np.concatenate((cv1, cv2))
+    cv_board = cv_board[~np.isnan(cv_board)]
+
+    cv_dirt = np.clip(cv_dirt, 0, 0.5)
+    cv_board = np.clip(cv_board, 0, 0.5)
+
+    print(np.median(cv_dirt))
+    print(np.median(cv_board))
+
+    
+
+    t, p = stats.ttest_ind(cv_dirt, cv_board, equal_var=False)
+    print(t, p)
+
     plt.show()
 
