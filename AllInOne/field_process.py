@@ -652,6 +652,7 @@ class StalkInteractionPair:
 
         plt.show(block=True)
 
+
 class FieldStalkSection:
     def __init__(self, date, test_num, min_force_rate=-0.5, pos_accel_tol=0.8, force_accel_tol=700):
         # These params set the filter bounds for identifying which portions of the data are stalk interactions. These are ideally straight lines, increasing in
@@ -788,7 +789,8 @@ class FieldStalkSection:
     def calc_force_position(self, smooth=True, window=20, order=1, small_den_cutoff=5*1e-5):
         self.force_num = self.k_2*(self.strain_1 - self.c_1) - self.k_1*(self.strain_2 - self.c_2)
         self.force_den = self.k_1*self.k_2*(self.d_2 - self.d_1)
-        self.force = self.force_raw = np.where(self.force_num / self.force_den < 0, 0, self.force_num / self.force_den)
+        self.force = np.where(self.force_num / self.force_den < 0, 0, self.force_num / self.force_den)
+        self.force_raw = self.force_num / self.force_den
 
         self.pos_num = self.k_2*self.d_2*(self.strain_1 - self.c_1) - self.k_1*self.d_1*(self.strain_2 - self.c_2)
         self.pos_den = self.k_2*(self.strain_1 - self.c_1) - self.k_1*(self.strain_2 - self.c_2)
@@ -1238,6 +1240,25 @@ class FieldStalkSection:
 
         plt.show()
 
+    def plot_raw_StrainForce(self):
+        fig, ax = plt.subplots(3,1, sharex=True, figsize=(9,7))
+
+        ax[0].plot(self.time, self.strain_1_raw, linewidth=0.5)
+        ax[0].axhline(np.percentile(self.strain_1_raw, 99), c='red')
+        ax[0].axhline(np.percentile(self.strain_1_raw, 1), c='red')
+        ax[0].set_ylabel('Strain 1', fontsize=14)
+
+        ax[1].plot(self.time, self.strain_2_raw, linewidth=0.5)
+        ax[1].axhline(np.percentile(self.strain_2_raw, 99), c='red')
+        ax[1].axhline(np.percentile(self.strain_2_raw, 1), c='red')
+        ax[1].set_ylabel('Strain 2', fontsize=14)
+
+        ax[2].plot(self.time, self.force_raw, linewidth=0.5)
+        ax[2].axhline(np.percentile(self.force_raw, 99), c='red')
+        ax[2].axhline(np.percentile(self.force_raw, 1), c='red')
+        ax[2].set_ylabel('Force (N)', fontsize=14)
+        
+        ax[-1].set_xlabel('Time (s)')
 
 class TestResults:
     def __init__(self):
@@ -1395,8 +1416,8 @@ class TestResults:
         
         # Read the CSV files
         # darling_df = pd.read_csv(d_path, index_col=0)
-        HiSTIFS_df = pd.read_csv(h_path, index_col=0)
-        stalks_results = [HiSTIFS_df.loc[stalk][:-3].dropna().to_numpy() for stalk in HiSTIFS_df.index]
+        HiSTIFFS_df = pd.read_csv(h_path, index_col=0)
+        stalks_results = [HiSTIFFS_df.loc[stalk][:-3].dropna().to_numpy() for stalk in HiSTIFFS_df.index]
         
         plt.figure()
         for i, stalk in enumerate(stalks_results):
@@ -1729,24 +1750,100 @@ def show_day_results_interactive(dates, stalk_types, n=0):
     # for variety, label in zip(new_boxes, new_labels):
     #     print(f'{label} - Mean: {np.mean(variety):.2f}, StdDev: {np.std(variety):.2f} CV: {np.std(variety)/np.mean(variety):.2f}')
 
+def noise_character(date, test_num):
+    test = FieldStalkSection(date, test_num)
+    test.shift_initials(time_cutoff=myTimeCutoff)
+    test.calc_force_position(smooth=False)
+    test.plot_raw_StrainForce()
+
+    per1_1, med_1, per99_1 = np.percentile(test.strain_1_raw, (1, 50, 99))
+    per1_2, med_2, per99_2 = np.percentile(test.strain_2_raw, (1, 50, 99))
+    per1_f, med_f, per99_f = np.percentile(test.force_raw, (1, 50, 99))
+
+    print(f'Strain 1:\n1-99 Band: {abs(per1_1-per99_1):.6f}\n1st: {per1_1:.6f} Median: {med_1:.6f} 99th: {per99_1:.6f}')
+    print(f'Strain 2:\n1-99 Band: {abs(per1_2-per99_2):.6f}\n1st: {per1_2:.6f} Median: {med_2:.6f} 99th: {per99_2:.6f}')
+    print(f'Force:\n1-99 Band: {abs(per1_f-per99_f):.6f}\n1st: {per1_f:.6f} Median: {med_f:.6f} 99th: {per99_f:.6f}')
+
+def single_stalk_boxplots(dates, stalk_types, n=0):
+    all_stalks_results = []
+    for date in dates:
+        parent_folder = rf'Results\Field\{date}'
+        if not os.path.exists(parent_folder):
+            print(f'No results for date {date}')
+            continue
+
+        for i, stalk_type in enumerate(stalk_types):
+            subfolder = os.path.join(parent_folder, stalk_type)
+            if not os.path.exists(subfolder):
+                print(f'No results for type {stalk_type} on date {date}')
+                continue
+            if not (all(os.path.exists(os.path.join(subfolder, x)) for x in ['Stalk Clips', 'Stalk Traces']) and
+                any(f.startswith('stiffness') for f in os.listdir(subfolder))):
+                print(f'Required folders or files missing in subfolder {subfolder}')
+                continue
+
+            HS_path = os.path.join(subfolder, f'stiffness_{date}_{stalk_type}.csv')
+            HS_df = pd.read_csv(HS_path, index_col=0)
+            stalks_results = [HS_df.loc[stalk][:-3].dropna().to_numpy() for stalk in HS_df.index]
+            all_stalks_results.extend(stalks_results)
+
+
+    # Generate plots
+    # plt.figure()
+    # plt.boxplot(all_stalks_results)#, tick_labels=['']*len(all_stalks_results))
+    # plt.title('Same-Stalk Measurement Spread', fontsize=16)
+    # plt.ylabel(r'Stiffness ($N/m^2$)', fontsize=14)
+    # plt.xlabel('Stalk Number', fontsize=14)
+    # plt.ylim(0, 60)
+    # plt.legend(['Device: Hi-STIFFS B'], fontsize=12, loc='upper left')
+    # plt.xticks(rotation=30, ha='right')
+
+    # Compute summary statistics for each stalk
+    means = [np.mean(stalk) for stalk in all_stalks_results]
+    medians = [np.median(stalk) for stalk in all_stalks_results]
+    stds = [np.std(stalk, ddof=1) for stalk in all_stalks_results]  # Sample standard deviation
+    # Compute mean-median differences
+    deltas = [mean - med for mean, med in zip(means, medians)]
+    skew_estimates = [3 * delta / sd if sd != 0 else 0 for delta, sd in zip(deltas, stds)]
+    z = 0.6745  # z-score for 25th/75th percentiles
+    q1_estimates = [med - z * sd for med, sd in zip(medians, stds)]
+    q3_estimates = [med + z * sd for med, sd in zip(medians, stds)]
+    # Adjust quartiles with k=0.5
+    k = 0.5
+    q1_adj = [q1 + k * delta for q1, delta in zip(q1_estimates, deltas)]
+    q3_adj = [q3 + k * delta for q3, delta in zip(q3_estimates, deltas)]
+
+    # X positions: one per stalk
+    x = np.arange(1, len(all_stalks_results)+1)
+
+    # Plot median as main line
+    plt.scatter(x, medians, color='orange', marker='_', s=50, zorder=5)
+
+    # Add estimated Q1–Q3 as vertical lines (mimics boxplot whiskers without outliers)
+    for i in range(len(x)):
+        plt.vlines(x[i], q1_adj[i], q3_adj[i], color='black', linewidth=6, alpha=0.2, zorder=4)
+        # Optional thin caps
+        plt.hlines(q1_adj[i], x[i]-0.2, x[i]+0.2, color='black', linewidth=1)
+        plt.hlines(q3_adj[i], x[i]-0.2, x[i]+0.2, color='black', linewidth=1)
+
+    # Formatting
+    plt.title('Same-Stalk Measurement Summary (Estimated Quartiles)', fontsize=16)
+    plt.ylabel(r'Stiffness ($N/m^2$)', fontsize=14)
+    plt.xlabel('Stalk Number', fontsize=14)
+    plt.ylim(0, 60)
+    plt.legend(['Device: Hi-STIFFS A'], fontsize=12, loc='upper left')
+    plt.xticks(x, rotation=30, ha='right')
+
 
 if __name__ == '__main__':
     
-    myDates = ['10_01']; myTestNums = range(51, 60+1); myTypesToProcess = ['Vigor 1 - 2SDirt']
+    myDates = ['10_01']; myTestNums = range(1, 1+1); myTypesToProcess = ['Vigor 1 - 15deg', 'Vigor 1 - 20deg', 'Vigor 2 - 15deg']
+    # noise_character(myDates[0], myTestNums[0])
+    # single_stalk_boxplots(myDates, myTypesToProcess)
     # show_force_position(dates=myDates, test_nums=myTestNums, show_accels=False)
     # display_and_clip_tests(dates=myDates, test_nums=myTestNums, num_stalks=13) 
     # interactive_process_clipped_stalks(dates=myDates, types_to_process=myTypesToProcess, select_spans=True)
     # show_section_results_interactive(dates=myDates, stalk_types=myTypesToProcess)
-    # show_day_results_interactive(dates=['08_07'], stalk_types=['11-B WE', '12-C WE', '13-B WE'])
-    # show_day_results_interactive(dates=['08_07'], stalk_types=['11-B WE', '12-C WE', '13-B WE', '15-A WE'], n=1)
-
-    # show_day_results_interactive(dates=['08_22'], stalk_types=['7-A Iso', '6-A Iso', '10-A Iso', '8-C Iso', '7-B Iso', '10-A', '8-C', '7-B'])
-    # show_day_results_interactive(dates=['08_22'], stalk_types=['7-A Iso', '7-B Iso', '6-A Iso', '10-A Iso', '8-C Iso'], n=1)
-    # show_day_results_interactive(dates=['08_22'], stalk_types=['10-A', '8-C', '7-B'], n=2)
-    # show_day_results_interactive(dates=['08_22'], stalk_types=['7-A Iso'], n=1)
-
-    # show_day_results_interactive(dates=['08_19'], stalk_types=['med'])
-    # show_day_results_interactive(dates=['08_22', '08_07'], stalk_types=['7-A Iso', '7-B Iso', '6-A Iso', '10-A Iso', '8-C Iso', '11-B WE', '12-C WE', '13-B WE', '15-A WE'], n=1)
 
     # show_accels(dates=['08_13'], test_nums=[3])
     # process_and_store_section(dates=['08_22'], test_nums=range(1, 10+1))
@@ -1754,35 +1851,90 @@ if __name__ == '__main__':
     # show_day_results(date='08_07', correlation_flag=True)
     
     
-    cv_dirt = np.array([0.1651932,  0.5,        0.11421431, 0.1061719,  0.05633551, 0.10093206,
-                        0.35470862, 0.11357931, 0.21347642, 0.30801587, 0.15951702, 0.12420839,
-                        0.19017683, 0.35939948, 0.33701432, 0.22981235, 0.14935651, 0.40948684,
-                        0.20189415])
+    # cv_dirt = np.array([0.1651932,  0.5,        0.11421431, 0.1061719,  0.05633551, 0.10093206,
+    #                     0.35470862, 0.11357931, 0.21347642, 0.30801587, 0.15951702, 0.12420839,
+    #                     0.19017683, 0.35939948, 0.33701432, 0.22981235, 0.14935651, 0.40948684,
+    #                     0.20189415])
     
-    pd1 = pd.read_csv(r'Results\Field\10_01\Vigor 1 - 15deg\stiffness_10_01_Vigor 1 - 15deg.csv')
-    pd2 = pd.read_csv(r'Results\Field\10_01\Vigor 2 - 15deg\stiffness_10_01_Vigor 2 - 15deg.csv')
+    # pd1 = pd.read_csv(r'Results\Field\10_01\Vigor 1 - 15deg\stiffness_10_01_Vigor 1 - 15deg.csv')
+    # pd2 = pd.read_csv(r'Results\Field\10_01\Vigor 2 - 15deg\stiffness_10_01_Vigor 2 - 15deg.csv')
 
-    stiff1 = pd1['Median'].to_numpy()
-    stdev1 = pd1['Std_Dev'].to_numpy()
-    cv1 = stdev1 / stiff1
-    stiff2 = pd2['Median'].to_numpy()
-    stdev2 = pd2['Std_Dev'].to_numpy()
-    cv2 = stdev2 / stiff2
+    # stiff1 = pd1['Median'].to_numpy()
+    # stdev1 = pd1['Std_Dev'].to_numpy()
+    # cv1 = stdev1 / stiff1
+    # stiff2 = pd2['Median'].to_numpy()
+    # stdev2 = pd2['Std_Dev'].to_numpy()
+    # cv2 = stdev2 / stiff2
   
 
-    cv_board = np.concatenate((cv1, cv2))
-    cv_board = cv_board[~np.isnan(cv_board)]
+    # cv_board = np.concatenate((cv1, cv2))
+    # cv_board = cv_board[~np.isnan(cv_board)]
 
-    cv_dirt = np.clip(cv_dirt, 0, 0.5)
-    cv_board = np.clip(cv_board, 0, 0.5)
+    # cv_dirt = np.clip(cv_dirt, 0, 0.5)
+    # cv_board = np.clip(cv_board, 0, 0.5)
 
-    print(np.median(cv_dirt))
-    print(np.median(cv_board))
+    # print(np.median(cv_dirt))
+    # print(np.median(cv_board))
 
     
 
-    t, p = stats.ttest_ind(cv_dirt, cv_board, equal_var=False)
-    print(t, p)
+    # t, p = stats.ttest_ind(cv_dirt, cv_board, equal_var=False)
+    # print(t, p)
+
+    one = [10.005,10.495,3.467,4.567,1.362,5.880,6.670]
+    two = [36.553,52.864,41.011,32.680,28.212,36.397,44.279,4.112,15.175]
+    three = [33.304,22.822,25.807,20.981,23.292,10.645,20.666,13.766,17.455]
+    four = [4.754,11.286,5.784,11.667,18.226,10.708,14.081,6.949,13.608,8.705,9.097,10.411,8.176]
+    five = [5.010,10.901,15.349,18.251,20.778,5.363,19.174,24.775,25.949,9.611]
+    means = one + two + three + four + five
+
+    one = [9.359,10.228,3.690,4.594,1.369,5.872,6.761]
+    two = [35.571,51.891,38.954,32.993,26.660,36.259,44.627,4.169,14.671]
+    three = [32.897,20.909,25.383,21.198,20.793,10.685,20.524,14.113,17.377]
+    four = [4.189,11.422,5.942,12.155,18.134,11.574,14.520,6.980,13.344,7.938,9.354,9.422,7.972]
+    five = [6.901,10.776,14.601,18.367,21.191,5.206,19.044,25.839,26.215,9.619]
+    medians = one + two + three + four + five
+
+    one = [2.065,3.006,0.709,0.788,0.014,0.686,0.358]
+    two = [5.145,5.562,8.920,4.174,4.343,4.877,2.748,0.407,2.956]
+    three = [7.613,4.694,2.675,1.378,3.580,1.538,4.489,2.052,1.088]
+    four = [0.973,1.399,0.575,1.376,1.683,1.787,1.968,0.261,1.282,2.464,0.893,1.980,1.312]
+    five = [3.482,1.534,5.971,0.326,1.219,0.304,1.048,3.057,1.896,1.024]
+    stds = one + two + three + four + five
+
+    # Compute mean-median differences
+    deltas = [mean - med for mean, med in zip(means, medians)]
+    skew_estimates = [3 * delta / sd if sd != 0 else 0 for delta, sd in zip(deltas, stds)]
+    z = 0.6745  # z-score for 25th/75th percentiles
+    q1_estimates = [med - z * sd for med, sd in zip(medians, stds)]
+    q3_estimates = [med + z * sd for med, sd in zip(medians, stds)]
+    # Adjust quartiles with k=0.5
+    k = 0.5
+    q1_adj = [q1 + k * delta for q1, delta in zip(q1_estimates, deltas)]
+    q3_adj = [q3 + k * delta for q3, delta in zip(q3_estimates, deltas)]
+
+    # X positions: one per stalk
+    x = np.arange(1, len(means)+1)
+
+    # Plot median as main line
+    plt.scatter(x, medians, color='orange', marker='_', s=50, zorder=5)
+
+    # Add estimated Q1–Q3 as vertical lines (mimics boxplot whiskers without outliers)
+    for i in range(len(x)):
+        plt.vlines(x[i], q1_adj[i], q3_adj[i], color='black', linewidth=6, alpha=0.2, zorder=4)
+        # Optional thin caps
+        plt.hlines(q1_adj[i], x[i]-0.2, x[i]+0.2, color='black', linewidth=1)
+        plt.hlines(q3_adj[i], x[i]-0.2, x[i]+0.2, color='black', linewidth=1)
+
+    # Formatting
+    plt.title('Same-Stalk Measurement Summary (Estimated Quartiles)', fontsize=16)
+    plt.ylabel(r'Stiffness ($N/m^2$)', fontsize=14)
+    plt.xlabel('Stalk Number', fontsize=14)
+    plt.ylim(0, 60)
+    plt.legend(['Device: DARLING'], fontsize=12, loc='upper left')
+    plt.xticks(x, rotation=30, ha='right')
+
+
 
     plt.show()
 
