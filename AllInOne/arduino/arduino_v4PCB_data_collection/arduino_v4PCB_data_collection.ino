@@ -130,9 +130,9 @@ void loop() {
   Serial.print(",");
   Serial.print(diff0);
   Serial.print(",");
-  Serial.print(diff2);
+  Serial.print(diff3);
   Serial.print(",");
-  Serial.print(diff1);
+  Serial.print(diff0);
   Serial.print(",");
   Serial.println(diff3);
 }

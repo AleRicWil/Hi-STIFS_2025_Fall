@@ -1,19 +1,172 @@
 import serial
 import csv
-import keyboard
 import numpy as np
 import pandas as pd
 from datetime import datetime
 import pyqtgraph as pg
 from PyQt5 import QtWidgets, QtCore
+from PyQt5.QtWidgets import QPushButton, QLabel, QHBoxLayout, QVBoxLayout, QWidget
 from multiprocessing import Queue
 import time
 import os
+import collections
+import keyboard
 
-# Constants
-SUPPLY_VOLTAGE = 5
-RESOLUTION = 2**9
-GAIN = 16
+# === ADS1115 parameters ===
+ADS1115_BITS            = 15                    # True resolution in differential mode (signed)
+ADS1115_MAX_COUNT       = 2**ADS1115_BITS       # 32768 (from –32768 to +32767)
+ADS1115_PGA_GAIN        = 16                    # Your configured gain
+ADS1115_FSR_AT_GAIN_1   = 4.096                 # Full-scale range at gain ×1 (±4.096 V)
+SUPPLY_VOLTAGE          = 5.0                   # Bridge excitation (kept only for documentation/clarity)
+
+# Full-scale range at your actual gain ×16
+FSR_AT_CURRENT_GAIN = ADS1115_FSR_AT_GAIN_1 / ADS1115_PGA_GAIN   # ±0.256 V
+
+# Total number of ADC counts across the full ±FSR range
+TOTAL_COUNTS_AT_GAIN = ADS1115_MAX_COUNT * ADS1115_PGA_GAIN     # 32768 × 16 = 524288
+
+# Volts per LSB (least significant bit from ADC)
+VOLTS_PER_LSB = (2 * FSR_AT_CURRENT_GAIN) / TOTAL_COUNTS_AT_GAIN
+# → 0.512 V / 524288 = 1 / 131072 V ≈ 7.62939 µV/LSB
+
+# NOTE ON UNITS:
+# - CSV file: all strain values are stored in Volts (required for calibration consistency)
+# - Live plots: strain traces are displayed in millivolts (×1000) for readability
+# - Force/position calculations use the original Volt values — never altered
+
+# === Plotting parameters ===
+PLOT_REFRESH_HZ = 120  # Refresh rate for plot updates in Hz; start at 60, test up to 120 if stable
+
+class SerialReader(QtCore.QThread):
+    """Thread for reading serial data, processing, and writing to CSV."""
+
+    data_ready = QtCore.pyqtSignal(list)  # Emits processed data for plotting
+    stop_signal = QtCore.pyqtSignal()     # Emits to trigger stop in GUI
+    status_signal = QtCore.pyqtSignal(str)  # For status messages
+    rate_updated = QtCore.pyqtSignal(float)  # Emits updated input rate in Hz
+
+    def __init__(self, ser, csvfile, csvwriter, k_1, d_1, c_1, k_2, d_2, c_2,
+                 k_B1, d_B1, c_B1, k_B2, d_B2, c_B2,
+                 m_x, b_x, m_y, b_y, m_z, b_z,
+                 accelerations_flag, two_sensors_flag):
+        super().__init__()
+        self.ser = ser
+        self.csvfile = csvfile
+        self.csvwriter = csvwriter
+        self.k_1 = k_1
+        self.d_1 = d_1
+        self.c_1 = c_1
+        self.k_2 = k_2
+        self.d_2 = d_2
+        self.c_2 = c_2
+        self.k_B1 = k_B1
+        self.d_B1 = d_B1
+        self.c_B1 = c_B1
+        self.k_B2 = k_B2
+        self.d_B2 = d_B2
+        self.c_B2 = c_B2
+        self.m_x = m_x
+        self.b_x = b_x
+        self.m_y = m_y
+        self.b_y = b_y
+        self.m_z = m_z
+        self.b_z = b_z
+        self.accelerations_flag = accelerations_flag
+        self.two_sensors_flag = two_sensors_flag
+        self.running = True
+        self.packet_times = collections.deque(maxlen=10000)  # Timestamps of received packets
+        self.last_rate_time = time.time()
+
+    def run(self):
+        time_offset_check = True
+        time_offset = 0.0
+        while self.running:
+            if keyboard.is_pressed('space'):
+                self.stop_signal.emit()
+                break
+
+            line = self.ser.readline().decode('utf-8', errors='ignore').strip()
+            if line == "test ended":
+                self.stop_signal.emit()
+                break
+            if line.startswith('$'):
+                reset_time = float(line.split(',')[1]) * 1e-6 if len(line.split(',')) > 1 else 0.0
+                self.status_signal.emit(f"Reset at {reset_time}")
+                continue
+            data = line.split(',')
+            expected_len = 5 if not self.accelerations_flag else 8  # Adjust if accelerations enabled
+            if len(data) != expected_len:
+                self.status_signal.emit("Invalid data packet")
+                continue
+            try:
+                time_sec = float(data[0]) * 1e-6
+                strain_1 = float(data[1]) * VOLTS_PER_LSB
+                strain_2 = float(data[2]) * VOLTS_PER_LSB
+                strain_B1 = float(data[3]) * VOLTS_PER_LSB
+                strain_B2 = float(data[4]) * VOLTS_PER_LSB
+                acx1 = 0.0
+                acy1 = 0.0
+                acz1 = 0.0
+                if self.accelerations_flag:
+                    acx1 = float(data[5])
+                    acy1 = float(data[6])
+                    acz1 = float(data[7])
+            except (ValueError, IndexError):
+                self.status_signal.emit("Cannot parse data")
+                continue
+
+            if time_offset_check:
+                time_offset = time_sec
+                time_offset_check = False
+            time_sec -= time_offset
+
+            self.packet_times.append(time.time())  # Record packet arrival time
+
+            now = datetime.now()
+            self.csvwriter.writerow([time_sec, strain_1, strain_2, strain_B1, strain_B2, acx1, acy1, acz1, now.time()])
+            self.csvfile.flush()
+
+            # Calculate force and position
+            force = (self.k_2 * (strain_1 - self.c_1) - self.k_1 * (strain_2 - self.c_2)) / (self.k_1 * self.k_2 * (self.d_2 - self.d_1))
+            num = (self.k_2 * self.d_2 * (strain_1 - self.c_1) - self.k_1 * self.d_1 * (strain_2 - self.c_2))
+            den = (self.k_2 * (strain_1 - self.c_1) - self.k_1 * (strain_2 - self.c_2))
+            position = num / den if abs(den) > 2.5e-5 else 0.0
+            position = 0.0 if position > 0.25 or position < -0.10 else position
+
+            force_B = 0.0
+            position_B = 0.0
+            if self.two_sensors_flag:
+                force_B = (self.k_B2 * (strain_B1 - self.c_B1) - self.k_B1 * (strain_B2 - self.c_B2)) / (self.k_B1 * self.k_B2 * (self.d_B2 - self.d_B1))
+                num_B = (self.k_B2 * self.d_B2 * (strain_B1 - self.c_B1) - self.k_B1 * self.d_B1 * (strain_B2 - self.c_B2))
+                den_B = (self.k_B2 * (strain_B1 - self.c_B1) - self.k_B1 * (strain_B2 - self.c_B2))
+                position_B = num_B / den_B if abs(den_B) > 2.5e-5 else 0.0
+                position_B = 0.0 if position_B > 0.25 or position_B < -0.10 else position_B
+
+            pitch = 0.0
+            roll = 0.0
+            z_g = 0.0
+            if self.accelerations_flag:
+                x_g = acx1 * self.m_x + self.b_x
+                y_g = acy1 * self.m_y + self.b_y
+                z_g = acz1 * self.m_z + self.b_z
+                theta_x = np.arctan2(-y_g, np.sqrt(x_g**2 + z_g**2))
+                theta_y = np.arctan2(x_g, np.sqrt(y_g**2 + z_g**2))
+                pitch = np.degrees(theta_x)
+                roll = np.degrees(theta_y)
+
+            # Emit data for plotting
+            self.data_ready.emit([time_sec, strain_1, strain_2, strain_B1, strain_B2,
+                                  force, position * 100, force_B, position_B * 100,
+                                  pitch, roll, z_g])
+
+            # Update input rate periodically
+            current_time = time.time()
+            if current_time - self.last_rate_time > 1.0:
+                if self.packet_times:
+                    recent_count = sum(1 for t in self.packet_times if current_time - t <= 3.0)
+                    rate = recent_count / 3.0
+                    self.rate_updated.emit(rate)
+                self.last_rate_time = current_time
 
 class RealTimePlotWindow(QtWidgets.QMainWindow):
     """Class to handle real-time strain, force, and position data collection and plotting from an Arduino.
@@ -34,13 +187,13 @@ class RealTimePlotWindow(QtWidgets.QMainWindow):
         curve_b2 (pg.PlotDataItem): Plot curve for B2 strain.
         curve_force (pg.PlotDataItem): Plot curve for force.
         curve_pos (pg.PlotDataItem): Plot curve for position.
-        time_sec (np.ndarray): Array of time values.
-        strain_a1 (np.ndarray): Array of A1 strain values.
-        strain_b1 (np.ndarray): Array of B1 strain values.
-        strain_a2 (np.ndarray): Array of A2 strain values.
-        strain_b2 (np.ndarray): Array of B2 strain values.
-        force (np.ndarray): Array of force values.
-        position (np.ndarray): Array of position values.
+        time_sec (collections.deque): Deque of time values.
+        strain_a1 (collections.deque): Deque of A1 strain values.
+        strain_b1 (collections.deque): Deque of B1 strain values.
+        strain_a2 (collections.deque): Deque of A2 strain values.
+        strain_b2 (collections.deque): Deque of B2 strain values.
+        force (collections.deque): Deque of force values.
+        position (collections.deque): Deque of position values.
         time_offset (float): Time offset for data collection.
         time_offset_check (bool): Flag to set initial time offset.
         plot_time (float): Last time plotted to control update frequency.
@@ -92,7 +245,6 @@ class RealTimePlotWindow(QtWidgets.QMainWindow):
             self.b_z = latest_acc_cal['Offset Z']
         except Exception as e:
             self.status_queue.put(f"Error loading calibration: {str(e)}")
-            self.ser.close()
             return
 
         try:
@@ -141,21 +293,53 @@ class RealTimePlotWindow(QtWidgets.QMainWindow):
         headers = ['Time', 'Strain A1', 'Strain A2', 'Strain B1', 'Strain B2', 'AcX1', 'AcY1', 'AcZ1', 'Current Time']
         self.csvwriter.writerow(headers)
 
-        pg.setConfigOptions(antialias=True)
-        # Strain plot window
-        self.win_strain = pg.GraphicsLayoutWidget(show=True, title=f"Strain Data Plots - Test {config['test_num']}")
-        if self.accelerations_flag:
-            self.win_strain.resize(1000, 500)
-            self.win_strain.move(0, 0)
-        else:
-            self.win_strain.resize(1000, 1000)
-            self.win_strain.move(0, 0)
+        # Performance optimizations for high refresh rates
+        pg.setConfigOptions(useOpenGL=True, antialias=False)
+
+        # Strain plot window with preset buttons for time range
+        self.strain_window = QWidget()
+        self.strain_window.setWindowTitle(f"Strain Data Plots - Test {config['test_num']}")
+        layout = QVBoxLayout()
+
+        self.win_strain = pg.GraphicsLayoutWidget()
         self.plot_1 = self.win_strain.addPlot(title='Strain 1')
-        self.curve_1 = self.plot_1.plot(pen='r', name='1 Strain')
+        self.plot_1.setLabel('left', '', units='mV')
+        # Display-only scaling: actual data in CSV remains in Volts
+        self.curve_1 = self.plot_1.plot(pen='r', name='A1 Strain')
         self.curve_B1 = self.plot_1.plot(pen='b', name='B1 Strain')
+
         self.plot_2 = self.win_strain.addPlot(title='Strain 2')
-        self.curve_2 = self.plot_2.plot(pen='r', name='2 Strain')
-        self.curve_B2 = self.plot_2.plot(pen='b', name='B1 Strain')
+        self.plot_2.setLabel('left', '', units='mV')
+        # Display-only scaling: actual data in CSV remains in Volts
+        self.curve_2 = self.plot_2.plot(pen='r', name='A2 Strain')
+        self.curve_B2 = self.plot_2.plot(pen='b', name='B2 Strain')
+
+        layout.addWidget(self.win_strain)
+
+        # Add preset buttons for display time range and rate label
+        preset_layout = QHBoxLayout()
+        preset_label = QLabel("Time Range (s):")
+        preset_layout.addWidget(preset_label)
+        presets = [0.1, 0.5, 1, 3, 5, 10, 15, 20]
+        for preset in presets:
+            btn = QPushButton(str(preset))
+            btn.clicked.connect(lambda _, p=preset: self.set_time_range(p))
+            preset_layout.addWidget(btn)
+        self.rate_label = QLabel("Input Rate: 0 Hz")
+        preset_layout.addStretch()
+        preset_layout.addWidget(self.rate_label)
+        layout.addLayout(preset_layout)
+
+        self.strain_window.setLayout(layout)
+        if self.accelerations_flag:
+            self.strain_window.resize(1000, 550)  # Slightly taller to fit buttons
+            self.strain_window.move(0, 0)
+        else:
+            self.strain_window.resize(1000, 1050)  # Slightly taller to fit buttons
+            self.strain_window.move(0, 0)
+        self.strain_window.show()
+
+        self.display_time_range = 10.0  # Initial time range in seconds
 
         # Force and position plot window
         self.win_force_pos = pg.GraphicsLayoutWidget(show=True, title=f"Force and Position - Test {config['test_num']}")
@@ -187,161 +371,118 @@ class RealTimePlotWindow(QtWidgets.QMainWindow):
             self.plot_mpuZ = self.win_accel.addPlot(title='Z Acceleration (g)')
             self.curve_z1 = self.plot_mpuZ.plot(pen='b', name='Z')
 
-        self.time_sec = []
-        self.strain_1 = []
-        self.strain_2 = []
-        self.strain_B1 = []
-        self.strain_B2 = []
-        self.force = []
-        self.position = []
-        if self.two_sensors_flag:
-            self.force_B = []
-            self.position_B = []
-
+        # Use deques for plotting data to limit memory usage
+        maxlen = 20 * 120  # Sufficient for ~20s at 120 Hz (safety for high inputs)
+        self.time_sec = collections.deque(maxlen=maxlen)
+        self.strain_1 = collections.deque(maxlen=maxlen)
+        self.strain_2 = collections.deque(maxlen=maxlen)
+        self.strain_B1 = collections.deque(maxlen=maxlen)
+        self.strain_B2 = collections.deque(maxlen=maxlen)
+        self.force = collections.deque(maxlen=maxlen)
+        self.position = collections.deque(maxlen=maxlen)
+        self.force_B = collections.deque(maxlen=maxlen)
+        self.position_B = collections.deque(maxlen=maxlen)
         if self.accelerations_flag:
-            self.pitch = []
-            self.roll = []
-            self.acz1 = []
+            self.pitch = collections.deque(maxlen=maxlen)
+            self.roll = collections.deque(maxlen=maxlen)
+            self.acz1 = collections.deque(maxlen=maxlen)
 
-        self.time_offset_check = True
-        self.time_offset = 0
-        self.plot_time = 0
+        # Create and start the serial reader thread
+        self.reader = SerialReader(self.ser, self.csvfile, self.csvwriter,
+                                   self.k_1, self.d_1, self.c_1, self.k_2, self.d_2, self.c_2,
+                                   self.k_B1, self.d_B1, self.c_B1, self.k_B2, self.d_B2, self.c_B2,
+                                   self.m_x, self.b_x, self.m_y, self.b_y, self.m_z, self.b_z,
+                                   self.accelerations_flag, self.two_sensors_flag)
+        self.reader.data_ready.connect(self.handle_data)
+        self.reader.stop_signal.connect(self.stop_collection)
+        self.reader.status_signal.connect(lambda msg: self.status_queue.put(msg))
+        self.reader.rate_updated.connect(lambda rate: self.rate_label.setText(f"Input Rate: {rate:.1f} Hz"))
+        self.reader.start()
 
-        self.timer = QtCore.QTimer(self)
-        self.timer.timeout.connect(self.update_plot)
-        self.timer.start(1)
+        # Set up timer for fixed-rate plot updates
+        self.plot_timer = QtCore.QTimer()
+        self.plot_timer.timeout.connect(self.update_plots)
+        self.plot_timer.start(int(1000 / PLOT_REFRESH_HZ))  # Interval in ms
 
-    def update_plot(self):
-        """Update the strain, force, and position plots with new data from the serial port."""
-        try:
-            line = self.ser.readline().decode('utf-8').strip()
-            if line == "test ended" or keyboard.is_pressed('space'):
-                self.status_queue.put("Data collection ended")
-                self.ser.close()
-                self.csvfile.close()
-                self.timer.stop()
-                self.win_strain.close()
-                self.win_force_pos.close()
-                if self.accelerations_flag:
-                    self.win_accel.close()
-                return
+        self.status_queue.put("Press 'space' to end data collection")
 
-            if line.startswith('$'):
-                self.status_queue.put(f"Reset at {float(line.split(',')[1])*1e-6}")
-                return
+    def handle_data(self, data_list):
+        """Handle emitted data from the thread: append to deques (updates handled by timer)."""
+        time_sec, strain_1, strain_2, strain_B1, strain_B2, force, position, force_B, position_B, pitch, roll, acz1 = data_list
 
-            data = line.split(',')
-            if len(data) != 5:
-                self.status_queue.put("Invalid data packet")
-                
-            try:
-                time_sec = float(data[0]) * 1e-6
-                strain_1 = float(data[1]) * SUPPLY_VOLTAGE / (RESOLUTION * GAIN)
-                strain_2 = float(data[2]) * SUPPLY_VOLTAGE / (RESOLUTION * GAIN)
-                strain_B1 = float(data[3]) * SUPPLY_VOLTAGE / (RESOLUTION * GAIN)
-                strain_B2 = float(data[4]) * SUPPLY_VOLTAGE / (RESOLUTION * GAIN)
-                
-                acx1 =0# float(data[3])
-                acy1 =0# float(data[4])
-                acz1 =0# float(data[5])
-            except (ValueError, IndexError):
-                self.status_queue.put("Cannot parse data")
-                return
+        self.time_sec.append(time_sec)
+        # === Strain values: convert to mV for display only ===
+        # NOTE: CSV file still records true voltage in Volts.
+        #       Calibration coefficients (k, d, c) were determined using volts,
+        #       so we must NOT change the values written to disk.
+        self.strain_1.append(strain_1 * 1000.0)   # Display in mV
+        self.strain_2.append(strain_2 * 1000.0)   # Display in mV
+        self.strain_B1.append(strain_B1 * 1000.0) # Display in mV
+        self.strain_B2.append(strain_B2 * 1000.0) # Display in mV
+        # ====================================================
+        self.force.append(force)
+        self.position.append(position)
+        self.force_B.append(force_B)
+        self.position_B.append(position_B)
+        if self.accelerations_flag:
+            self.pitch.append(pitch)
+            self.roll.append(roll)
+            self.acz1.append(acz1)
 
-            if self.time_offset_check:
-                self.time_offset = time_sec
-                self.time_offset_check = False
-            time_sec -= self.time_offset
+    def update_plots(self):
+        """Update all plot curves and ranges."""
+        self.curve_1.setData(self.time_sec, self.strain_1)
+        self.curve_2.setData(self.time_sec, self.strain_2)
+        self.curve_B1.setData(self.time_sec, self.strain_B1)
+        self.curve_B2.setData(self.time_sec, self.strain_B2)
+        self.curve_force.setData(self.time_sec, self.force)
+        self.curve_pos.setData(self.time_sec, self.position)
+        if self.two_sensors_flag:
+            self.curve_force_B.setData(self.time_sec, self.force_B)
+            self.curve_pos_B.setData(self.time_sec, self.position_B)
+        if self.accelerations_flag:
+            self.curve_pitch.setData(self.time_sec, self.pitch)
+            self.curve_roll.setData(self.time_sec, self.roll)
+            self.curve_z1.setData(self.time_sec, self.acz1)
 
-            now = datetime.now()
-            self.csvwriter.writerow([time_sec, strain_1, strain_2, strain_B1, strain_B2, acx1, acy1, acz1, now.time()])
-            self.csvfile.flush()
+        if self.time_sec:
+            x_min = max(0, self.time_sec[-1] - self.display_time_range)
+            x_max = self.time_sec[-1]
+        else:
+            x_min = 0
+            x_max = 0
 
-            # Calculate force and position and angles
-            force = (self.k_2 * (strain_1 - self.c_1) - self.k_1 * (strain_2 - self.c_2)) / (self.k_1 * self.k_2 * (self.d_2 - self.d_1))
-            num = (self.k_2 * self.d_2 * (strain_1 - self.c_1) - self.k_1 * self.d_1 * (strain_2 - self.c_2))
-            den = (self.k_2 * (strain_1 - self.c_1) - self.k_1 * (strain_2 - self.c_2))
-            position = num / den if abs(den) > 2.5e-5 else 0
-            position = 0 if position > 0.25 or position < -0.10 else position
+        self.plot_1.setXRange(x_min, x_max)
+        self.plot_2.setXRange(x_min, x_max)
+        self.plot_force.setXRange(x_min, x_max)
+        self.plot_pos.setXRange(x_min, x_max)
+        if self.accelerations_flag:
+            self.plot_mpuXY.setXRange(x_min, x_max)
+            self.plot_mpuZ.setXRange(x_min, x_max)
 
-            if self.two_sensors_flag:
-                force_B = (self.k_B2 * (strain_B1 - self.c_B1) - self.k_B1 * (strain_B2 - self.c_B2)) / (self.k_B1 * self.k_B2 * (self.d_B2 - self.d_B1))
-                num = (self.k_B2 * self.d_B2 * (strain_B1 - self.c_B1) - self.k_B1 * self.d_B1 * (strain_B2 - self.c_B2))
-                den = (self.k_B2 * (strain_B1 - self.c_B1) - self.k_B1 * (strain_B2 - self.c_B2))
-                position_B =  num / den if abs(den) > 2.5e-5 else 0
-                position_B = 0 if position_B > 0.25 or position_B < -0.10 else position_B
+    def set_time_range(self, value):
+        """Set the display time range based on button preset."""
+        self.display_time_range = float(value)
+        # Trigger an immediate plot update to reflect the new range
+        self.update_plots()
 
-            if self.accelerations_flag:
-                # Calculate pitch and roll (in radians) 
-                x_g = acx1*self.m_x + self.b_x
-                y_g = acy1*self.m_y + self.b_y
-                z_g = acz1*self.m_z + self.b_z
-                theta_x = np.arctan2(-y_g, np.sqrt(x_g**2 + z_g**2))  # Angle about global x-axis
-                theta_y = np.arctan2(x_g, np.sqrt(y_g**2 + z_g**2))  # Angle about global y-axis
+    def keyPressEvent(self, event):
+        """Handle key press events for stopping collection."""
+        if event.key() == QtCore.Qt.Key_Space:
+            self.stop_collection()
 
-                x_angle = np.degrees(theta_x)
-                y_angle = np.degrees(theta_y)
-
-            increment = 0.05
-            if time_sec - self.plot_time > increment:
-                self.time_sec.append(time_sec)
-                self.strain_1.append(strain_1)
-                self.strain_2.append(strain_2)
-                self.strain_B1.append(strain_B1)
-                self.strain_B2.append(strain_B2)
-                self.force.append(force)
-                self.position.append(position * 100)
-                if self.two_sensors_flag:
-                    self.force_B.append(force_B)
-                    self.position_B.append(position_B * 100)
-
-                if self.accelerations_flag:
-                    self.pitch.append(x_angle)
-                    self.roll.append(y_angle)
-                    self.acz1.append(z_g)
-
-                self.curve_1.setData(self.time_sec, self.strain_1)
-                self.curve_2.setData(self.time_sec, self.strain_2)
-                self.curve_B1.setData(self.time_sec, self.strain_B1)
-                self.curve_B2.setData(self.time_sec, self.strain_B2)
-                self.curve_force.setData(self.time_sec, self.force)
-                self.curve_pos.setData(self.time_sec, self.position)
-                if self.two_sensors_flag:
-                    self.curve_force_B.setData(self.time_sec, self.force_B)
-                    self.curve_pos_B.setData(self.time_sec, self.position_B)
-                if self.accelerations_flag:
-                    self.curve_pitch.setData(self.time_sec, self.pitch)
-                    self.curve_roll.setData(self.time_sec, self.roll)
-                    self.curve_z1.setData(self.time_sec, self.acz1)
-
-                x_min = max(0, self.time_sec[-1] - 10)
-                x_max = self.time_sec[-1]
-                self.plot_1.setXRange(x_min, x_max)
-                self.plot_2.setXRange(x_min, x_max)
-                self.plot_force.setXRange(x_min, x_max)
-                self.plot_pos.setXRange(x_min, x_max)
-                if self.accelerations_flag:
-                    self.plot_mpuXY.setXRange(x_min, x_max)
-                    self.plot_mpuZ.setXRange(x_min, x_max)
-
-                self.plot_time = time_sec
-
-            self.status_queue.put(f"Press 'space' to end data collection")
-
-        except KeyboardInterrupt:
-            self.status_queue.put("Interrupted by user")
-            self.ser.close()
-            self.csvfile.close()
-            self.timer.stop()
-            self.win_strain.close()
-            self.win_force_pos.close()
-        except Exception as e:
-            self.status_queue.put(f"Error: {str(e)}")
-            self.ser.close()
-            self.csvfile.close()
-            self.timer.stop()
-            self.win_strain.close()
-            self.win_force_pos.close()
+    def stop_collection(self):
+        """Stop data collection and clean up."""
+        self.status_queue.put("Data collection ended")
+        self.plot_timer.stop()
+        self.reader.running = False
+        self.reader.wait()  # Wait for thread to finish
+        self.ser.close()
+        self.csvfile.close()
+        self.strain_window.close()
+        self.win_force_pos.close()
+        if self.accelerations_flag:
+            self.win_accel.close()
 
 def run_collection(port, config, status_queue):
     """Run the real-time plot window in a separate process.
@@ -353,4 +494,3 @@ def run_collection(port, config, status_queue):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     window = RealTimePlotWindow(port, config, status_queue)
     app.exec_()
-
